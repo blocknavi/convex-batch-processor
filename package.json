@@ -16,11 +16,15 @@
 	"scripts": {
 		"build": "tsc --project ./tsconfig.build.json",
 		"build:clean": "rm -rf dist *.tsbuildinfo && pnpm run build",
-		"dev": "tsc --project ./tsconfig.build.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
-		"prepublishOnly": "pnpm run build:clean && pnpm run lint"
+		"prepublishOnly": "pnpm run build:clean && pnpm run lint",
+		"preversion": "pnpm install && pnpm run build:clean && pnpm run test && pnpm run lint",
+		"alpha": "npm version prerelease --preid alpha && npm publish --tag alpha && git push --follow-tags",
+		"release": "npm version patch && npm publish && git push --follow-tags"
 	},
 	"files": ["dist", "src"],
 	"exports": {
@@ -36,16 +40,23 @@
 		"./convex.config": {
 			"types": "./dist/component/convex.config.d.ts",
 			"default": "./dist/component/convex.config.js"
+		},
+		"./_generated/component.js": {
+			"types": "./dist/component/_generated/component.d.ts"
+		},
+		"./_generated/component": {
+			"types": "./dist/component/_generated/component.d.ts"
 		}
 	},
 	"dependencies": {
-		"convex": "^1.17.0"
+		"convex": "^1.31.6"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.0",
-		"typescript": "^5.6.0"
+		"typescript": "^5.6.0",
+		"vitest": "^2.0.0"
 	},
 	"peerDependencies": {
-		"convex": "^1.17.0"
+		"convex": "^1.31.6"
 	}
 }
