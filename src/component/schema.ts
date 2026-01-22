@@ -2,7 +2,6 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-	// Batch accumulator state
 	batches: defineTable({
 		batchId: v.string(),
 		items: v.array(v.any()),
@@ -15,11 +14,11 @@ export default defineSchema({
 			flushIntervalMs: v.number(),
 			onFlushHandle: v.optional(v.string()),
 		}),
+		scheduledFlushId: v.optional(v.id("_scheduled_functions")),
 	})
 		.index("by_batchId", ["batchId"])
 		.index("by_status", ["status"]),
 
-	// Iterator job state
 	iteratorJobs: defineTable({
 		jobId: v.string(),
 		cursor: v.optional(v.string()),
@@ -47,7 +46,6 @@ export default defineSchema({
 		.index("by_jobId", ["jobId"])
 		.index("by_status", ["status"]),
 
-	// Flush history for monitoring
 	flushHistory: defineTable({
 		batchId: v.string(),
 		itemCount: v.number(),

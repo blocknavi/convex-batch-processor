@@ -2,13 +2,6 @@ import { mutation, query, action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
-// =============================================================================
-// Batch Accumulator Public API
-// =============================================================================
-
-/**
- * Add items to a batch. Will auto-flush if the batch reaches maxBatchSize.
- */
 export const addItems = mutation({
 	args: {
 		batchId: v.string(),
@@ -22,14 +15,14 @@ export const addItems = mutation({
 	handler: async (ctx, { batchId, items, config }) => {
 		const now = Date.now();
 
-		// Get or create batch
 		let batch = await ctx.db
 			.query("batches")
 			.withIndex("by_batchId", (q) => q.eq("batchId", batchId))
 			.first();
 
+		let isNewBatch = false;
 		if (!batch) {
-			// Create new batch
+			isNewBatch = true;
 			const batchDocId = await ctx.db.insert("batches", {
 				batchId,
 				items: [],
@@ -46,21 +39,22 @@ export const addItems = mutation({
 			throw new Error(`Batch ${batchId} is not in accumulating state`);
 		}
 
-		// Add items to batch
 		const newItems = [...batch.items, ...items];
 		const newItemCount = newItems.length;
 
-		// Check if we need to auto-flush
 		if (newItemCount >= config.maxBatchSize && config.onFlushHandle) {
-			// Mark as flushing
+			if (batch.scheduledFlushId) {
+				await ctx.scheduler.cancel(batch.scheduledFlushId);
+			}
+
 			await ctx.db.patch(batch._id, {
 				items: newItems,
 				itemCount: newItemCount,
 				lastUpdatedAt: now,
 				status: "flushing",
+				scheduledFlushId: undefined,
 			});
 
-			// Schedule the flush action
 			await ctx.scheduler.runAfter(0, internal.internal.executeFlush, {
 				batchDocId: batch._id,
 				items: newItems,
@@ -75,12 +69,27 @@ export const addItems = mutation({
 			};
 		}
 
-		// Just add items without flushing
+		let scheduledFlushId = batch.scheduledFlushId;
+		const shouldScheduleFlush =
+			config.flushIntervalMs > 0 &&
+			config.onFlushHandle &&
+			!scheduledFlushId &&
+			(isNewBatch || batch.itemCount === 0);
+
+		if (shouldScheduleFlush) {
+			scheduledFlushId = await ctx.scheduler.runAfter(
+				config.flushIntervalMs,
+				internal.internal.scheduledIntervalFlush,
+				{ batchDocId: batch._id }
+			);
+		}
+
 		await ctx.db.patch(batch._id, {
 			items: newItems,
 			itemCount: newItemCount,
 			lastUpdatedAt: now,
-			config, // Update config in case it changed
+			config,
+			scheduledFlushId,
 		});
 
 		return {
@@ -92,9 +101,6 @@ export const addItems = mutation({
 	},
 });
 
-/**
- * Force flush a batch regardless of size threshold
- */
 export const flushBatch = mutation({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
@@ -119,12 +125,15 @@ export const flushBatch = mutation({
 			throw new Error(`Batch ${batchId} has no onFlushHandle configured`);
 		}
 
-		// Mark as flushing
+		if (batch.scheduledFlushId) {
+			await ctx.scheduler.cancel(batch.scheduledFlushId);
+		}
+
 		await ctx.db.patch(batch._id, {
 			status: "flushing",
+			scheduledFlushId: undefined,
 		});
 
-		// Schedule the flush action
 		await ctx.scheduler.runAfter(0, internal.internal.executeFlush, {
 			batchDocId: batch._id,
 			items: batch.items,
@@ -140,9 +149,6 @@ export const flushBatch = mutation({
 	},
 });
 
-/**
- * Get the current status of a batch
- */
 export const getBatchStatus = query({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
@@ -166,9 +172,6 @@ export const getBatchStatus = query({
 	},
 });
 
-/**
- * Get flush history for a batch
- */
 export const getFlushHistory = query({
 	args: {
 		batchId: v.string(),
@@ -188,9 +191,6 @@ export const getFlushHistory = query({
 	},
 });
 
-/**
- * Delete a batch (only if completed or accumulating with no items)
- */
 export const deleteBatch = mutation({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
@@ -211,18 +211,15 @@ export const deleteBatch = mutation({
 			return { deleted: false, reason: "Cannot delete batch with pending items" };
 		}
 
+		if (batch.scheduledFlushId) {
+			await ctx.scheduler.cancel(batch.scheduledFlushId);
+		}
+
 		await ctx.db.delete(batch._id);
 		return { deleted: true };
 	},
 });
 
-// =============================================================================
-// Table Iterator Public API
-// =============================================================================
-
-/**
- * Start a new iterator job
- */
 export const startIteratorJob = mutation({
 	args: {
 		jobId: v.string(),
@@ -236,7 +233,6 @@ export const startIteratorJob = mutation({
 		}),
 	},
 	handler: async (ctx, { jobId, config }) => {
-		// Check if job already exists
 		const existingJob = await ctx.db
 			.query("iteratorJobs")
 			.withIndex("by_jobId", (q) => q.eq("jobId", jobId))
@@ -248,7 +244,6 @@ export const startIteratorJob = mutation({
 
 		const now = Date.now();
 
-		// Create the job
 		const jobDocId = await ctx.db.insert("iteratorJobs", {
 			jobId,
 			cursor: undefined,
@@ -267,16 +262,12 @@ export const startIteratorJob = mutation({
 			lastRunAt: now,
 		});
 
-		// Schedule the first batch processing
 		await ctx.scheduler.runAfter(0, internal.internal.processNextBatch, { jobDocId });
 
 		return { jobId, status: "running" };
 	},
 });
 
-/**
- * Pause a running iterator job
- */
 export const pauseIteratorJob = mutation({
 	args: { jobId: v.string() },
 	handler: async (ctx, { jobId }) => {
@@ -301,9 +292,6 @@ export const pauseIteratorJob = mutation({
 	},
 });
 
-/**
- * Resume a paused iterator job
- */
 export const resumeIteratorJob = mutation({
 	args: { jobId: v.string() },
 	handler: async (ctx, { jobId }) => {
@@ -322,19 +310,15 @@ export const resumeIteratorJob = mutation({
 
 		await ctx.db.patch(job._id, {
 			status: "running",
-			retryCount: 0, // Reset retry count on resume
+			retryCount: 0,
 		});
 
-		// Schedule the next batch processing
 		await ctx.scheduler.runAfter(0, internal.internal.processNextBatch, { jobDocId: job._id });
 
 		return { jobId, status: "running" };
 	},
 });
 
-/**
- * Cancel an iterator job
- */
 export const cancelIteratorJob = mutation({
 	args: { jobId: v.string() },
 	handler: async (ctx, { jobId }) => {
@@ -351,8 +335,6 @@ export const cancelIteratorJob = mutation({
 			return { jobId, status: job.status, reason: "Job already finished" };
 		}
 
-		// Just mark as paused - no way to cancel scheduled functions
-		// The processNextBatch will check status and stop if not running
 		await ctx.db.patch(job._id, {
 			status: "failed",
 			errorMessage: "Cancelled by user",
@@ -362,9 +344,6 @@ export const cancelIteratorJob = mutation({
 	},
 });
 
-/**
- * Get the status of an iterator job
- */
 export const getIteratorJobStatus = query({
 	args: { jobId: v.string() },
 	handler: async (ctx, { jobId }) => {
@@ -394,9 +373,6 @@ export const getIteratorJobStatus = query({
 	},
 });
 
-/**
- * List all iterator jobs with optional status filter
- */
 export const listIteratorJobs = query({
 	args: {
 		status: v.optional(
@@ -434,9 +410,6 @@ export const listIteratorJobs = query({
 	},
 });
 
-/**
- * Delete an iterator job (only if completed or failed)
- */
 export const deleteIteratorJob = mutation({
 	args: { jobId: v.string() },
 	handler: async (ctx, { jobId }) => {
@@ -458,31 +431,19 @@ export const deleteIteratorJob = mutation({
 	},
 });
 
-// =============================================================================
-// Batch Flush Timer Action
-// =============================================================================
-
-/**
- * Action to check and trigger interval-based flushes
- * This should be called periodically (e.g., via cron) to flush batches
- * that haven't been updated within their flushIntervalMs
- */
 export const triggerIntervalFlushes = action({
 	args: {},
 	handler: async (ctx) => {
-		// Get batches that need flushing
 		const batchesToFlush = await ctx.runMutation(internal.internal.checkFlushTimers);
 
 		const results: Array<{ batchId: string; flushed: boolean }> = [];
 
 		for (const { batchDocId, batchId } of batchesToFlush) {
-			// Get batch data and mark as flushing
 			const batchData = await ctx.runMutation(internal.internal.markBatchFlushing, {
 				batchDocId: batchDocId as any,
 			});
 
 			if (batchData && batchData.onFlushHandle) {
-				// Execute flush
 				await ctx.runAction(internal.internal.executeFlush, {
 					batchDocId: batchDocId as any,
 					items: batchData.items,
