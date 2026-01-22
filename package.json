@@ -1,0 +1,51 @@
+{
+	"name": "convex-batch-processor",
+	"version": "0.1.0",
+	"description": "Batch processing component for Convex - batch accumulator and table iterator",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/blocknavi/convex-batch-processor"
+	},
+	"homepage": "https://github.com/blocknavi/convex-batch-processor#readme",
+	"bugs": {
+		"url": "https://github.com/blocknavi/convex-batch-processor/issues"
+	},
+	"license": "MIT",
+	"keywords": ["convex", "component", "batch", "processing", "iterator", "accumulator"],
+	"type": "module",
+	"scripts": {
+		"build": "tsc --project ./tsconfig.build.json",
+		"build:clean": "rm -rf dist *.tsbuildinfo && pnpm run build",
+		"dev": "tsc --project ./tsconfig.build.json --watch",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"prepublishOnly": "pnpm run build:clean && pnpm run lint"
+	},
+	"files": ["dist", "src"],
+	"exports": {
+		"./package.json": "./package.json",
+		".": {
+			"types": "./dist/client/index.d.ts",
+			"default": "./dist/client/index.js"
+		},
+		"./convex.config.js": {
+			"types": "./dist/component/convex.config.d.ts",
+			"default": "./dist/component/convex.config.js"
+		},
+		"./convex.config": {
+			"types": "./dist/component/convex.config.d.ts",
+			"default": "./dist/component/convex.config.js"
+		}
+	},
+	"dependencies": {
+		"convex": "^1.17.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"typescript": "^5.6.0"
+	},
+	"peerDependencies": {
+		"convex": "^1.17.0"
+	}
+}
