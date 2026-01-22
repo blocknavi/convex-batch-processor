@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-01-22
+
 ### Added
 - Testing infrastructure with vitest
 - Client type tests for BatchProcessor class and exported types
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated Convex dependency to ^1.31.6
 - Simplified tsconfig.build.json with extends pattern
+- Cleaned up code comments
 
 ## [0.1.0] - 2024-01-01
 

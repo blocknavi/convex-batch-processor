@@ -1,6 +1,6 @@
 # convex-batch-processor
 
-A reusable Convex component for batch processing that provides:
+A Convex component for batch processing:
 
 1. **Batch Accumulator** - Collect items and flush when reaching size threshold or time interval
 2. **Table Iterator** - Process large tables in controlled batch sizes with pause/resume support
@@ -32,7 +32,7 @@ export default app;
 
 The batch accumulator collects items and flushes them based on:
 - **Size threshold**: Flush when `maxBatchSize` items collected
-- **Time interval**: Flush when `flushIntervalMs` elapsed since last activity
+- **Time interval**: Flush automatically after `flushIntervalMs` since first item was added
 - **Manual trigger**: Force flush via API call
 
 ```typescript
@@ -43,7 +43,6 @@ import { v } from "convex/values";
 
 const batchProcessor = new BatchProcessor(components.batchProcessor);
 
-// Add items to a batch
 export const trackEvent = mutation({
   args: {
     eventName: v.string(),
@@ -54,13 +53,12 @@ export const trackEvent = mutation({
 
     return await batchProcessor.addItems(ctx, "analytics-events", [event], {
       maxBatchSize: 100,
-      flushIntervalMs: 30000, // 30 seconds
+      flushIntervalMs: 30000,
       onFlushHandle: internal.analytics.sendBatch.toString(),
     });
   },
 });
 
-// Force flush a batch
 export const flushEvents = mutation({
   args: {},
   handler: async (ctx) => {
@@ -68,7 +66,6 @@ export const flushEvents = mutation({
   },
 });
 
-// Get batch status
 export const getBatchStatus = query({
   args: {},
   handler: async (ctx) => {
@@ -76,11 +73,9 @@ export const getBatchStatus = query({
   },
 });
 
-// Callback that processes flushed items
 export const sendBatch = internalAction({
   args: { items: v.array(v.any()) },
   handler: async (ctx, { items }) => {
-    // Send items to your analytics service
     await fetch("https://api.analytics.com/batch", {
       method: "POST",
       body: JSON.stringify({ events: items }),
@@ -89,35 +84,7 @@ export const sendBatch = internalAction({
 });
 ```
 
-#### Interval-Based Flushes
-
-To enable time-based flushing, set up a cron job:
-
-```typescript
-// convex/crons.ts
-import { cronJobs } from "convex/server";
-import { internal } from "./_generated/api";
-
-const crons = cronJobs();
-
-crons.interval(
-  "check-batch-flushes",
-  { seconds: 30 },
-  internal.batch.checkFlushes
-);
-
-export default crons;
-```
-
-```typescript
-// convex/batch.ts
-export const checkFlushes = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    return await batchProcessor.triggerIntervalFlushes(ctx);
-  },
-});
-```
+The interval flush is scheduled automatically when the first item is added to a batch. No cron job is required.
 
 ### Table Iterator
 
@@ -134,7 +101,6 @@ import { v } from "convex/values";
 
 const batchProcessor = new BatchProcessor(components.batchProcessor);
 
-// Start a migration job
 export const startMigration = mutation({
   args: {},
   handler: async (ctx) => {
@@ -153,7 +119,6 @@ export const startMigration = mutation({
   },
 });
 
-// Callback: Fetch next batch of items
 export const getNextBatch = internalQuery({
   args: {
     cursor: v.optional(v.string()),
@@ -172,7 +137,6 @@ export const getNextBatch = internalQuery({
   },
 });
 
-// Callback: Process a batch of items
 export const processBatch = internalAction({
   args: { items: v.array(v.any()) },
   handler: async (ctx, { items }) => {
@@ -182,7 +146,6 @@ export const processBatch = internalAction({
   },
 });
 
-// Callback: Called when job completes
 export const onComplete = internalMutation({
   args: {
     jobId: v.string(),
@@ -197,7 +160,6 @@ export const onComplete = internalMutation({
 #### Job Control
 
 ```typescript
-// Pause a running job
 export const pause = mutation({
   args: { jobId: v.string() },
   handler: async (ctx, { jobId }) => {
@@ -205,7 +167,6 @@ export const pause = mutation({
   },
 });
 
-// Resume a paused job
 export const resume = mutation({
   args: { jobId: v.string() },
   handler: async (ctx, { jobId }) => {
@@ -213,7 +174,6 @@ export const resume = mutation({
   },
 });
 
-// Cancel a job
 export const cancel = mutation({
   args: { jobId: v.string() },
   handler: async (ctx, { jobId }) => {
@@ -221,7 +181,6 @@ export const cancel = mutation({
   },
 });
 
-// Get job status
 export const getStatus = query({
   args: { jobId: v.string() },
   handler: async (ctx, { jobId }) => {
@@ -229,7 +188,6 @@ export const getStatus = query({
   },
 });
 
-// List all jobs
 export const listJobs = query({
   args: { status: v.optional(v.string()) },
   handler: async (ctx, { status }) => {
@@ -251,7 +209,7 @@ export const listJobs = query({
 | `getBatchStatus(ctx, batchId)` | Get batch status |
 | `getFlushHistory(ctx, batchId, limit?)` | Get flush history |
 | `deleteBatch(ctx, batchId)` | Delete a completed batch |
-| `triggerIntervalFlushes(ctx)` | Trigger interval-based flushes |
+| `triggerIntervalFlushes(ctx)` | Manually trigger interval-based flushes |
 
 #### Table Iterator Methods
 
@@ -271,9 +229,9 @@ export const listJobs = query({
 
 ```typescript
 interface BatchConfig {
-  maxBatchSize: number;      // Max items before auto-flush
-  flushIntervalMs: number;   // Time before interval flush
-  onFlushHandle?: string;    // Function handle for flush callback
+  maxBatchSize: number;
+  flushIntervalMs: number;
+  onFlushHandle?: string;
 }
 ```
 
@@ -281,37 +239,33 @@ interface BatchConfig {
 
 ```typescript
 interface IteratorConfig {
-  batchSize: number;              // Items per batch
-  delayBetweenBatchesMs?: number; // Delay between batches (default: 100)
-  getNextBatchHandle: string;     // Query function handle
-  processBatchHandle: string;     // Action function handle
-  onCompleteHandle?: string;      // Completion callback handle
-  maxRetries?: number;            // Max retries (default: 5)
+  batchSize: number;
+  delayBetweenBatchesMs?: number;
+  getNextBatchHandle: string;
+  processBatchHandle: string;
+  onCompleteHandle?: string;
+  maxRetries?: number;
 }
 ```
 
 #### Callback Types
 
 ```typescript
-// getNextBatch return type
 interface GetNextBatchResult<T = unknown> {
   items: T[];
   cursor: string | undefined;
   done: boolean;
 }
 
-// processBatch args
 interface ProcessBatchArgs<T = unknown> {
   items: T[];
 }
 
-// onComplete args
 interface OnCompleteArgs {
   jobId: string;
   processedCount: number;
 }
 
-// onFlush args
 interface OnFlushArgs<T = unknown> {
   items: T[];
 }
@@ -331,19 +285,10 @@ interface OnFlushArgs<T = unknown> {
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Run tests
 npm test
-
-# Lint
 npm run lint
-
-# Format
 npm run format
 ```
 

@@ -18,10 +18,6 @@ import {
 
 const batchProcessor = new BatchProcessor(components.batchProcessor);
 
-// =============================================================================
-// Batch Accumulator - Analytics Events
-// =============================================================================
-
 export const trackEvent = mutation({
 	args: {
 		eventName: v.string(),
@@ -59,14 +55,9 @@ export const getAnalyticsStatus = query({
 export const sendAnalyticsBatch = internalAction({
 	args: { items: v.array(v.any()) },
 	handler: async (_ctx, { items }: OnFlushArgs) => {
-		// Send to your analytics service here
 		console.log(`Sending ${items.length} analytics events`);
 	},
 });
-
-// =============================================================================
-// Table Iterator - User Migration
-// =============================================================================
 
 export const startUserMigration = mutation({
 	args: {
@@ -94,7 +85,6 @@ export const getNextUserBatch = internalQuery({
 		batchSize: v.number(),
 	},
 	handler: async (ctx, { cursor, batchSize }: GetNextBatchArgs): Promise<GetNextBatchResult> => {
-		// Replace with your actual table query
 		const results = await ctx.db.query("users").paginate({
 			cursor: cursor ?? null,
 			numItems: batchSize,
@@ -112,7 +102,6 @@ export const processUserBatch = internalAction({
 	args: { items: v.array(v.any()) },
 	handler: async (_ctx, { items }: ProcessBatchArgs) => {
 		for (const user of items) {
-			// Process each user here
 			console.log(`Processing user: ${(user as any)._id}`);
 		}
 	},
@@ -165,10 +154,6 @@ export const listMigrations = query({
 		return await batchProcessor.listIteratorJobs(ctx, { status });
 	},
 });
-
-// =============================================================================
-// Cron for Interval-Based Flushes
-// =============================================================================
 
 export const checkBatchFlushes = internalAction({
 	args: {},
