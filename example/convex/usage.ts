@@ -101,7 +101,10 @@ export const getNextUserBatch = internalQuery({
 		cursor: v.optional(v.string()),
 		batchSize: v.number(),
 	},
-	handler: async (ctx, { cursor, batchSize }: GetNextBatchArgs): Promise<GetNextBatchResult<User>> => {
+	handler: async (
+		ctx,
+		{ cursor, batchSize }: GetNextBatchArgs,
+	): Promise<GetNextBatchResult<User>> => {
 		const results = await ctx.db.query("users").paginate({
 			cursor: cursor ?? null,
 			numItems: batchSize,

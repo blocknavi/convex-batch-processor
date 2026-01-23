@@ -1,8 +1,8 @@
 import {
-	createFunctionHandle,
 	type FunctionReference,
 	type GenericMutationCtx,
 	type GenericQueryCtx,
+	createFunctionHandle,
 } from "convex/server";
 
 export type BatchStatus = "accumulating" | "flushing" | "completed";
@@ -18,7 +18,11 @@ export interface BatchConfig<T = unknown> {
 export interface IteratorConfig<T = unknown> {
 	batchSize: number;
 	delayBetweenBatchesMs?: number;
-	getNextBatch: FunctionReference<"query", "internal", { cursor: string | undefined; batchSize: number }>;
+	getNextBatch: FunctionReference<
+		"query",
+		"internal",
+		{ cursor: string | undefined; batchSize: number }
+	>;
 	processBatch: FunctionReference<"action", "internal", { items: T[] }>;
 	onComplete?: FunctionReference<"mutation", "internal", { jobId: string; processedCount: number }>;
 	maxRetries?: number;
@@ -174,13 +178,11 @@ export class BatchProcessor<T = unknown> {
 		this.config = config;
 	}
 
-	async addItems(
-		ctx: GenericMutationCtx<any>,
-		batchId: string,
-		items: T[],
-	): Promise<BatchResult> {
+	async addItems(ctx: GenericMutationCtx<any>, batchId: string, items: T[]): Promise<BatchResult> {
 		if (!this.config) {
-			throw new Error("BatchProcessor config with processBatch is required to use addItems. Pass config to the constructor.");
+			throw new Error(
+				"BatchProcessor config with processBatch is required to use addItems. Pass config to the constructor.",
+			);
 		}
 
 		if (!this.processBatchHandle) {
@@ -236,7 +238,9 @@ export class BatchProcessor<T = unknown> {
 			delayBetweenBatchesMs: config.delayBetweenBatchesMs,
 			getNextBatchHandle: await createFunctionHandle(config.getNextBatch),
 			processBatchHandle: await createFunctionHandle(config.processBatch),
-			onCompleteHandle: config.onComplete ? await createFunctionHandle(config.onComplete) : undefined,
+			onCompleteHandle: config.onComplete
+				? await createFunctionHandle(config.onComplete)
+				: undefined,
 			maxRetries: config.maxRetries,
 		};
 
@@ -302,4 +306,3 @@ export interface OnCompleteArgs {
 	jobId: string;
 	processedCount: number;
 }
-
