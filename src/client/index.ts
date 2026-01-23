@@ -1,20 +1,37 @@
-import type {
-	FunctionReference,
-	GenericActionCtx,
-	GenericMutationCtx,
-	GenericQueryCtx,
+import {
+	createFunctionHandle,
+	type FunctionReference,
+	type GenericMutationCtx,
+	type GenericQueryCtx,
 } from "convex/server";
 
 export type BatchStatus = "accumulating" | "flushing" | "completed";
 export type JobStatus = "pending" | "running" | "paused" | "completed" | "failed";
 
-export interface BatchConfig {
+// User-facing config interfaces (accept FunctionReference)
+export interface BatchConfig<T = unknown> {
 	maxBatchSize: number;
 	flushIntervalMs: number;
-	onFlushHandle?: string;
+	processBatch: FunctionReference<"action", "internal", { items: T[] }>;
 }
 
-export interface IteratorConfig {
+export interface IteratorConfig<T = unknown> {
+	batchSize: number;
+	delayBetweenBatchesMs?: number;
+	getNextBatch: FunctionReference<"query", "internal", { cursor: string | undefined; batchSize: number }>;
+	processBatch: FunctionReference<"action", "internal", { items: T[] }>;
+	onComplete?: FunctionReference<"mutation", "internal", { jobId: string; processedCount: number }>;
+	maxRetries?: number;
+}
+
+// Internal config interfaces (use string handles for component API)
+interface InternalBatchConfig {
+	maxBatchSize: number;
+	flushIntervalMs: number;
+	processBatchHandle: string;
+}
+
+interface InternalIteratorConfig {
 	batchSize: number;
 	delayBetweenBatchesMs?: number;
 	getNextBatchHandle: string;
@@ -90,7 +107,7 @@ export interface BatchProcessorAPI {
 		addItems: FunctionReference<
 			"mutation",
 			"public",
-			{ batchId: string; items: unknown[]; config: BatchConfig },
+			{ batchId: string; items: unknown[]; config: InternalBatchConfig },
 			BatchResult
 		>;
 		flushBatch: FunctionReference<"mutation", "public", { batchId: string }, FlushResult>;
@@ -115,7 +132,7 @@ export interface BatchProcessorAPI {
 		startIteratorJob: FunctionReference<
 			"mutation",
 			"public",
-			{ jobId: string; config: IteratorConfig },
+			{ jobId: string; config: InternalIteratorConfig },
 			JobResult
 		>;
 		pauseIteratorJob: FunctionReference<"mutation", "public", { jobId: string }, JobResult>;
@@ -144,32 +161,42 @@ export interface BatchProcessorAPI {
 			{ jobId: string },
 			{ deleted: boolean; reason?: string }
 		>;
-		triggerIntervalFlushes: FunctionReference<
-			"action",
-			"public",
-			Record<string, never>,
-			Array<{ batchId: string; flushed: boolean }>
-		>;
 	};
 }
 
-export class BatchProcessor {
+export class BatchProcessor<T = unknown> {
 	private component: BatchProcessorAPI;
+	private config?: BatchConfig<T>;
+	private processBatchHandle: string | null = null;
 
-	constructor(component: BatchProcessorAPI) {
+	constructor(component: BatchProcessorAPI, config?: BatchConfig<T>) {
 		this.component = component;
+		this.config = config;
 	}
 
 	async addItems(
 		ctx: GenericMutationCtx<any>,
 		batchId: string,
-		items: unknown[],
-		config: BatchConfig,
+		items: T[],
 	): Promise<BatchResult> {
+		if (!this.config) {
+			throw new Error("BatchProcessor config with processBatch is required to use addItems. Pass config to the constructor.");
+		}
+
+		if (!this.processBatchHandle) {
+			this.processBatchHandle = await createFunctionHandle(this.config.processBatch);
+		}
+
+		const internalConfig: InternalBatchConfig = {
+			maxBatchSize: this.config.maxBatchSize,
+			flushIntervalMs: this.config.flushIntervalMs,
+			processBatchHandle: this.processBatchHandle,
+		};
+
 		return await ctx.runMutation(this.component.public.addItems, {
 			batchId,
 			items,
-			config,
+			config: internalConfig,
 		});
 	}
 
@@ -199,20 +226,23 @@ export class BatchProcessor {
 		return await ctx.runMutation(this.component.public.deleteBatch, { batchId });
 	}
 
-	async triggerIntervalFlushes(
-		ctx: GenericActionCtx<any>,
-	): Promise<Array<{ batchId: string; flushed: boolean }>> {
-		return await ctx.runAction(this.component.public.triggerIntervalFlushes, {});
-	}
-
-	async startIterator(
+	async startIterator<T>(
 		ctx: GenericMutationCtx<any>,
 		jobId: string,
-		config: IteratorConfig,
+		config: IteratorConfig<T>,
 	): Promise<JobResult> {
+		const internalConfig: InternalIteratorConfig = {
+			batchSize: config.batchSize,
+			delayBetweenBatchesMs: config.delayBetweenBatchesMs,
+			getNextBatchHandle: await createFunctionHandle(config.getNextBatch),
+			processBatchHandle: await createFunctionHandle(config.processBatch),
+			onCompleteHandle: config.onComplete ? await createFunctionHandle(config.onComplete) : undefined,
+			maxRetries: config.maxRetries,
+		};
+
 		return await ctx.runMutation(this.component.public.startIteratorJob, {
 			jobId,
-			config,
+			config: internalConfig,
 		});
 	}
 
@@ -273,6 +303,3 @@ export interface OnCompleteArgs {
 	processedCount: number;
 }
 
-export interface OnFlushArgs<T = unknown> {
-	items: T[];
-}

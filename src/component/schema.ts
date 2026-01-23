@@ -12,7 +12,7 @@ export default defineSchema({
 		config: v.object({
 			maxBatchSize: v.number(),
 			flushIntervalMs: v.number(),
-			onFlushHandle: v.optional(v.string()),
+			processBatchHandle: v.string(),
 		}),
 		scheduledFlushId: v.optional(v.id("_scheduled_functions")),
 	})

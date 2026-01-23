@@ -6,7 +6,6 @@ import {
 	type GetNextBatchResult,
 	type IteratorConfig,
 	type OnCompleteArgs,
-	type OnFlushArgs,
 	type ProcessBatchArgs,
 } from "./index";
 
@@ -16,7 +15,7 @@ describe("BatchProcessor client", () => {
 		expect(typeof BatchProcessor).toBe("function");
 	});
 
-	test("BatchProcessor constructor accepts component API", () => {
+	test("BatchProcessor constructor accepts component API without config", () => {
 		// Create a mock component API
 		const mockComponent = {
 			public: {
@@ -32,11 +31,36 @@ describe("BatchProcessor client", () => {
 				getIteratorJobStatus: {} as any,
 				listIteratorJobs: {} as any,
 				deleteIteratorJob: {} as any,
-				triggerIntervalFlushes: {} as any,
 			},
 		};
 
 		const processor = new BatchProcessor(mockComponent);
+		expect(processor).toBeInstanceOf(BatchProcessor);
+	});
+
+	test("BatchProcessor constructor accepts component API with config", () => {
+		const mockComponent = {
+			public: {
+				addItems: {} as any,
+				flushBatch: {} as any,
+				getBatchStatus: {} as any,
+				getFlushHistory: {} as any,
+				deleteBatch: {} as any,
+				startIteratorJob: {} as any,
+				pauseIteratorJob: {} as any,
+				resumeIteratorJob: {} as any,
+				cancelIteratorJob: {} as any,
+				getIteratorJobStatus: {} as any,
+				listIteratorJobs: {} as any,
+				deleteIteratorJob: {} as any,
+			},
+		};
+
+		const processor = new BatchProcessor(mockComponent, {
+			maxBatchSize: 100,
+			flushIntervalMs: 30000,
+			processBatch: {} as any, // Mock FunctionReference
+		});
 		expect(processor).toBeInstanceOf(BatchProcessor);
 	});
 });
@@ -46,7 +70,7 @@ describe("type exports", () => {
 		const config: BatchConfig = {
 			maxBatchSize: 100,
 			flushIntervalMs: 30000,
-			onFlushHandle: "test:handle",
+			processBatch: {} as any, // FunctionReference is opaque, use mock
 		};
 		expect(config.maxBatchSize).toBe(100);
 	});
@@ -55,9 +79,9 @@ describe("type exports", () => {
 		const config: IteratorConfig = {
 			batchSize: 50,
 			delayBetweenBatchesMs: 100,
-			getNextBatchHandle: "test:getNextBatch",
-			processBatchHandle: "test:processBatch",
-			onCompleteHandle: "test:onComplete",
+			getNextBatch: {} as any, // FunctionReference mock
+			processBatch: {} as any, // FunctionReference mock
+			onComplete: {} as any, // FunctionReference mock
 			maxRetries: 3,
 		};
 		expect(config.batchSize).toBe(50);
@@ -93,12 +117,5 @@ describe("type exports", () => {
 			processedCount: 1000,
 		};
 		expect(args.processedCount).toBe(1000);
-	});
-
-	test("OnFlushArgs type is usable", () => {
-		const args: OnFlushArgs<string> = {
-			items: ["a", "b", "c"],
-		};
-		expect(args.items.length).toBe(3);
 	});
 });

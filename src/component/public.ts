@@ -9,7 +9,7 @@ export const addItems = mutation({
 		config: v.object({
 			maxBatchSize: v.number(),
 			flushIntervalMs: v.number(),
-			onFlushHandle: v.optional(v.string()),
+			processBatchHandle: v.string(),
 		}),
 	},
 	handler: async (ctx, { batchId, items, config }) => {
@@ -42,7 +42,7 @@ export const addItems = mutation({
 		const newItems = [...batch.items, ...items];
 		const newItemCount = newItems.length;
 
-		if (newItemCount >= config.maxBatchSize && config.onFlushHandle) {
+		if (newItemCount >= config.maxBatchSize) {
 			if (batch.scheduledFlushId) {
 				await ctx.scheduler.cancel(batch.scheduledFlushId);
 			}
@@ -58,7 +58,7 @@ export const addItems = mutation({
 			await ctx.scheduler.runAfter(0, internal.internal.executeFlush, {
 				batchDocId: batch._id,
 				items: newItems,
-				onFlushHandle: config.onFlushHandle,
+				processBatchHandle: config.processBatchHandle,
 			});
 
 			return {
@@ -72,7 +72,6 @@ export const addItems = mutation({
 		let scheduledFlushId = batch.scheduledFlushId;
 		const shouldScheduleFlush =
 			config.flushIntervalMs > 0 &&
-			config.onFlushHandle &&
 			!scheduledFlushId &&
 			(isNewBatch || batch.itemCount === 0);
 
@@ -121,8 +120,8 @@ export const flushBatch = mutation({
 			return { batchId, itemCount: 0, flushed: false, reason: "Batch is empty" };
 		}
 
-		if (!batch.config.onFlushHandle) {
-			throw new Error(`Batch ${batchId} has no onFlushHandle configured`);
+		if (!batch.config.processBatchHandle) {
+			throw new Error(`Batch ${batchId} has no processBatchHandle configured`);
 		}
 
 		if (batch.scheduledFlushId) {
@@ -137,7 +136,7 @@ export const flushBatch = mutation({
 		await ctx.scheduler.runAfter(0, internal.internal.executeFlush, {
 			batchDocId: batch._id,
 			items: batch.items,
-			onFlushHandle: batch.config.onFlushHandle,
+			processBatchHandle: batch.config.processBatchHandle,
 		});
 
 		return {
@@ -431,30 +430,3 @@ export const deleteIteratorJob = mutation({
 	},
 });
 
-export const triggerIntervalFlushes = action({
-	args: {},
-	handler: async (ctx) => {
-		const batchesToFlush = await ctx.runMutation(internal.internal.checkFlushTimers);
-
-		const results: Array<{ batchId: string; flushed: boolean }> = [];
-
-		for (const { batchDocId, batchId } of batchesToFlush) {
-			const batchData = await ctx.runMutation(internal.internal.markBatchFlushing, {
-				batchDocId: batchDocId as any,
-			});
-
-			if (batchData && batchData.onFlushHandle) {
-				await ctx.runAction(internal.internal.executeFlush, {
-					batchDocId: batchDocId as any,
-					items: batchData.items,
-					onFlushHandle: batchData.onFlushHandle,
-				});
-				results.push({ batchId, flushed: true });
-			} else {
-				results.push({ batchId, flushed: false });
-			}
-		}
-
-		return results;
-	},
-});

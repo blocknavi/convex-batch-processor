@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING**: Moved batch processor config from `addItems()` to constructor
+  - Before: `new BatchProcessor(component)` then `addItems(ctx, id, items, config)`
+  - After: `new BatchProcessor(component, config)` then `addItems(ctx, id, items)`
+- **BREAKING**: Renamed `onFlush` to `processBatch` for consistency with iterator API
+- **BREAKING**: Removed `OnFlushArgs` type - use `ProcessBatchArgs` instead
+- Config is optional when only using iterator functionality
+
 ## [0.2.0] - 2025-01-22
 
 ### Added

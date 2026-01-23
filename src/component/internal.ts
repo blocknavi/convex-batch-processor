@@ -17,15 +17,15 @@ export const executeFlush = internalAction({
 	args: {
 		batchDocId: v.id("batches"),
 		items: v.array(v.any()),
-		onFlushHandle: v.string(),
+		processBatchHandle: v.string(),
 	},
-	handler: async (ctx, { batchDocId, items, onFlushHandle }) => {
+	handler: async (ctx, { batchDocId, items, processBatchHandle }) => {
 		const startTime = Date.now();
 		let success = true;
 		let errorMessage: string | undefined;
 
 		try {
-			const handle = onFlushHandle as FunctionHandle<"action", { items: unknown[] }>;
+			const handle = processBatchHandle as FunctionHandle<"action", { items: unknown[] }>;
 			await ctx.runAction(handle, { items });
 		} catch (error) {
 			success = false;
@@ -76,7 +76,7 @@ export const recordFlushResult = internalMutation({
 			});
 		} else {
 			let scheduledFlushId: typeof batch.scheduledFlushId = undefined;
-			if (batch.config.flushIntervalMs > 0 && batch.config.onFlushHandle) {
+			if (batch.config.flushIntervalMs > 0 && batch.config.processBatchHandle) {
 				scheduledFlushId = await ctx.scheduler.runAfter(
 					batch.config.flushIntervalMs,
 					internal.internal.scheduledIntervalFlush,
@@ -89,35 +89,6 @@ export const recordFlushResult = internalMutation({
 				scheduledFlushId,
 			});
 		}
-	},
-});
-
-export const checkFlushTimers = internalMutation({
-	args: {},
-	handler: async (ctx) => {
-		const now = Date.now();
-		const batches = await ctx.db
-			.query("batches")
-			.withIndex("by_status", (q) => q.eq("status", "accumulating"))
-			.collect();
-
-		const batchesToFlush: Array<{ batchDocId: string; batchId: string }> = [];
-
-		for (const batch of batches) {
-			const timeSinceLastUpdate = now - batch.lastUpdatedAt;
-			if (
-				timeSinceLastUpdate >= batch.config.flushIntervalMs &&
-				batch.itemCount > 0 &&
-				batch.config.onFlushHandle
-			) {
-				batchesToFlush.push({
-					batchDocId: batch._id,
-					batchId: batch.batchId,
-				});
-			}
-		}
-
-		return batchesToFlush;
 	},
 });
 
@@ -136,7 +107,7 @@ export const markBatchFlushing = internalMutation({
 
 		return {
 			items: batch.items,
-			onFlushHandle: batch.config.onFlushHandle,
+			processBatchHandle: batch.config.processBatchHandle,
 		};
 	},
 });
@@ -148,14 +119,14 @@ export const scheduledIntervalFlush = internalAction({
 			batchDocId,
 		});
 
-		if (!batchData || !batchData.onFlushHandle) {
+		if (!batchData || !batchData.processBatchHandle) {
 			return { flushed: false, reason: "Batch not ready for flush" };
 		}
 
 		const result = await ctx.runAction(internal.internal.executeFlush, {
 			batchDocId,
 			items: batchData.items,
-			onFlushHandle: batchData.onFlushHandle,
+			processBatchHandle: batchData.processBatchHandle,
 		});
 
 		return { flushed: true, ...result };
