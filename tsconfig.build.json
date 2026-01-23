@@ -4,9 +4,10 @@
 		"noEmit": false,
 		"declaration": true,
 		"declarationMap": true,
+		"sourceMap": true,
 		"outDir": "./dist",
 		"rootDir": "./src"
 	},
-	"include": ["src/client/**/*", "src/component/convex.config.ts"],
+	"include": ["src/client/**/*", "src/component/**/*"],
 	"exclude": ["src/**/*.test.*"]
 }

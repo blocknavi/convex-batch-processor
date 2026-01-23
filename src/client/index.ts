@@ -107,7 +107,7 @@ export interface FlushHistoryItem {
 }
 
 export interface BatchProcessorAPI {
-	public: {
+	lib: {
 		addItems: FunctionReference<
 			"mutation",
 			"public",
@@ -195,7 +195,7 @@ export class BatchProcessor<T = unknown> {
 			processBatchHandle: this.processBatchHandle,
 		};
 
-		return await ctx.runMutation(this.component.public.addItems, {
+		return await ctx.runMutation(this.component.lib.addItems, {
 			batchId,
 			items,
 			config: internalConfig,
@@ -203,14 +203,14 @@ export class BatchProcessor<T = unknown> {
 	}
 
 	async flush(ctx: GenericMutationCtx<any>, batchId: string): Promise<FlushResult> {
-		return await ctx.runMutation(this.component.public.flushBatch, { batchId });
+		return await ctx.runMutation(this.component.lib.flushBatch, { batchId });
 	}
 
 	async getBatchStatus(
 		ctx: GenericQueryCtx<any>,
 		batchId: string,
 	): Promise<BatchStatusResult | null> {
-		return await ctx.runQuery(this.component.public.getBatchStatus, { batchId });
+		return await ctx.runQuery(this.component.lib.getBatchStatus, { batchId });
 	}
 
 	async getFlushHistory(
@@ -218,14 +218,14 @@ export class BatchProcessor<T = unknown> {
 		batchId: string,
 		limit?: number,
 	): Promise<FlushHistoryItem[]> {
-		return await ctx.runQuery(this.component.public.getFlushHistory, { batchId, limit });
+		return await ctx.runQuery(this.component.lib.getFlushHistory, { batchId, limit });
 	}
 
 	async deleteBatch(
 		ctx: GenericMutationCtx<any>,
 		batchId: string,
 	): Promise<{ deleted: boolean; reason?: string }> {
-		return await ctx.runMutation(this.component.public.deleteBatch, { batchId });
+		return await ctx.runMutation(this.component.lib.deleteBatch, { batchId });
 	}
 
 	async startIterator<T>(
@@ -244,46 +244,46 @@ export class BatchProcessor<T = unknown> {
 			maxRetries: config.maxRetries,
 		};
 
-		return await ctx.runMutation(this.component.public.startIteratorJob, {
+		return await ctx.runMutation(this.component.lib.startIteratorJob, {
 			jobId,
 			config: internalConfig,
 		});
 	}
 
 	async pauseIterator(ctx: GenericMutationCtx<any>, jobId: string): Promise<JobResult> {
-		return await ctx.runMutation(this.component.public.pauseIteratorJob, { jobId });
+		return await ctx.runMutation(this.component.lib.pauseIteratorJob, { jobId });
 	}
 
 	async resumeIterator(ctx: GenericMutationCtx<any>, jobId: string): Promise<JobResult> {
-		return await ctx.runMutation(this.component.public.resumeIteratorJob, { jobId });
+		return await ctx.runMutation(this.component.lib.resumeIteratorJob, { jobId });
 	}
 
 	async cancelIterator(
 		ctx: GenericMutationCtx<any>,
 		jobId: string,
 	): Promise<JobResult & { reason?: string }> {
-		return await ctx.runMutation(this.component.public.cancelIteratorJob, { jobId });
+		return await ctx.runMutation(this.component.lib.cancelIteratorJob, { jobId });
 	}
 
 	async getIteratorStatus(
 		ctx: GenericQueryCtx<any>,
 		jobId: string,
 	): Promise<JobStatusResult | null> {
-		return await ctx.runQuery(this.component.public.getIteratorJobStatus, { jobId });
+		return await ctx.runQuery(this.component.lib.getIteratorJobStatus, { jobId });
 	}
 
 	async listIteratorJobs(
 		ctx: GenericQueryCtx<any>,
 		options?: { status?: JobStatus; limit?: number },
 	): Promise<JobListItem[]> {
-		return await ctx.runQuery(this.component.public.listIteratorJobs, options ?? {});
+		return await ctx.runQuery(this.component.lib.listIteratorJobs, options ?? {});
 	}
 
 	async deleteIteratorJob(
 		ctx: GenericMutationCtx<any>,
 		jobId: string,
 	): Promise<{ deleted: boolean; reason?: string }> {
-		return await ctx.runMutation(this.component.public.deleteIteratorJob, { jobId });
+		return await ctx.runMutation(this.component.lib.deleteIteratorJob, { jobId });
 	}
 }
 

@@ -8,6 +8,9 @@ dist/
 .convex/
 **/convex/_generated/
 
+# But keep component's _generated (needed for publishing)
+!src/component/_generated/
+
 # Environment files
 .env
 .env.local

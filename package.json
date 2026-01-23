@@ -14,6 +14,7 @@
 	"keywords": ["convex", "component", "batch", "processing", "iterator", "accumulator"],
 	"type": "module",
 	"scripts": {
+		"codegen": "npx convex codegen --component-dir src/component",
 		"build": "tsc --project ./tsconfig.build.json",
 		"build:clean": "rm -rf dist *.tsbuildinfo && pnpm run build",
 		"test": "vitest run",
@@ -21,7 +22,7 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
-		"prepublishOnly": "pnpm run build:clean && pnpm run lint",
+		"prepublishOnly": "pnpm run build && pnpm run lint",
 		"preversion": "pnpm install && pnpm run build:clean && pnpm run test && pnpm run lint",
 		"alpha": "npm version prerelease --preid alpha && npm publish --tag alpha && git push --follow-tags",
 		"release": "npm version patch && npm publish && git push --follow-tags"
