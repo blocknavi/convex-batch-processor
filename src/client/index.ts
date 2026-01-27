@@ -10,7 +10,15 @@ export type JobStatus = "pending" | "running" | "paused" | "completed" | "failed
 
 // User-facing config interfaces (accept FunctionReference)
 export interface BatchConfig<T = unknown> {
-	maxBatchSize: number;
+	/**
+	 * Triggers an immediate flush when a single addItems() call adds this many items.
+	 * For accumulating small items over time, use flushIntervalMs instead.
+	 */
+	immediateFlushThreshold?: number;
+	/**
+	 * @deprecated Use `immediateFlushThreshold` instead. This field will be removed in a future version.
+	 */
+	maxBatchSize?: number;
 	flushIntervalMs: number;
 	processBatch: FunctionReference<"action", "internal", { items: T[] }>;
 }
@@ -30,7 +38,9 @@ export interface IteratorConfig<T = unknown> {
 
 // Internal config interfaces (use string handles for component API)
 interface InternalBatchConfig {
-	maxBatchSize: number;
+	immediateFlushThreshold?: number;
+	/** @deprecated */
+	maxBatchSize?: number;
 	flushIntervalMs: number;
 	processBatchHandle: string;
 }
@@ -68,7 +78,9 @@ export interface BatchStatusResult {
 		lastUpdatedAt: number;
 	}>;
 	config: {
-		maxBatchSize: number;
+		immediateFlushThreshold?: number;
+		/** @deprecated */
+		maxBatchSize?: number;
 		flushIntervalMs: number;
 	};
 }
@@ -211,6 +223,7 @@ export class BatchProcessor<T = unknown> {
 		}
 
 		const internalConfig: InternalBatchConfig = {
+			immediateFlushThreshold: this.config.immediateFlushThreshold,
 			maxBatchSize: this.config.maxBatchSize,
 			flushIntervalMs: this.config.flushIntervalMs,
 			processBatchHandle: this.processBatchHandle,

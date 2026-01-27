@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Renamed `maxBatchSize` to `immediateFlushThreshold` for clarity - the parameter triggers an immediate flush when a single `addItems()` call adds that many items, not a guaranteed batch size
+- `maxBatchSize` is now deprecated but still supported for backwards compatibility
+
 ## [1.0.7] - 2026-01-27
 
 ### Fixed
 - Fixed `BatchProcessorAPI` type to use `"internal"` visibility instead of `"public"` to match Convex-generated component APIs
 - **Fixed OCC conflicts in high-throughput scenarios**: Removed batchItems count query from `addItems` mutation. Now uses dual-trigger pattern:
   - **Time trigger**: Interval timer flushes after `flushIntervalMs` (handles accumulating small items)
-  - **Size trigger**: Immediate flush when single call adds `>= maxBatchSize` items (handles large batches)
+  - **Size trigger**: Immediate flush when single call adds `>= immediateFlushThreshold` items (handles large batches)
 - Fixed action scheduling reliability in component context by calling `executeFlush` directly from `maybeFlush` instead of scheduling
 
 ### Changed
@@ -31,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Redesigned `BatchStatusResult` to support multiple active batches:
   - Now returns `batches` array showing all active batches (flushing + accumulating)
   - Removed `baseBatchId` and `sequence` fields (internal implementation details)
-  - Simplified `config` to only include `maxBatchSize` and `flushIntervalMs`
+  - Simplified `config` to only include `immediateFlushThreshold` and `flushIntervalMs`
 - Config is optional when only using iterator functionality
 
 ## [0.2.0] - 2025-01-22

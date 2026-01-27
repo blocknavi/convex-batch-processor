@@ -59,7 +59,7 @@ describe("BatchProcessor client", () => {
 		};
 
 		const processor = new BatchProcessor(mockComponent, {
-			maxBatchSize: 100,
+			immediateFlushThreshold: 100,
 			flushIntervalMs: 30000,
 			processBatch: {} as any, // Mock FunctionReference
 		});
@@ -70,11 +70,11 @@ describe("BatchProcessor client", () => {
 describe("type exports", () => {
 	test("BatchConfig type is usable", () => {
 		const config: BatchConfig = {
-			maxBatchSize: 100,
+			immediateFlushThreshold: 100,
 			flushIntervalMs: 30000,
 			processBatch: {} as any, // FunctionReference is opaque, use mock
 		};
-		expect(config.maxBatchSize).toBe(100);
+		expect(config.immediateFlushThreshold).toBe(100);
 	});
 
 	test("IteratorConfig type is usable", () => {

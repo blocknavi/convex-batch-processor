@@ -32,7 +32,7 @@ export default app;
 
 The batch accumulator collects items and flushes them based on:
 - **Time interval**: Flush automatically after `flushIntervalMs` (primary trigger for high-throughput small items)
-- **Size threshold**: Immediate flush when a single call adds `>= maxBatchSize` items
+- **Size threshold**: Immediate flush when a single call adds `>= immediateFlushThreshold` items
 - **Manual trigger**: Force flush via API call
 
 ```typescript
@@ -53,7 +53,7 @@ type AnalyticsEvent = typeof analyticsEventValidator.type;
 // Create a batch processor with config
 // Note: Explicit type annotation is required when the file also exports Convex functions
 const batchProcessor: BatchProcessor<AnalyticsEvent> = new BatchProcessor(components.batchProcessor, {
-  maxBatchSize: 100,
+  immediateFlushThreshold: 100,
   flushIntervalMs: 30000,
   processBatch: internal.analytics.processEventsBatch,
 });
@@ -247,7 +247,10 @@ export const listJobs = query({
 
 ```typescript
 interface BatchConfig<T = unknown> {
-  maxBatchSize: number;
+  /** Triggers an immediate flush when a single addItems() call adds this many items */
+  immediateFlushThreshold?: number;
+  /** @deprecated Use immediateFlushThreshold instead */
+  maxBatchSize?: number;
   flushIntervalMs: number;
   processBatch: FunctionReference<"action", "internal", { items: T[] }>;
 }
@@ -263,7 +266,7 @@ Pass the function reference directly:
 
 ```typescript
 const batchProcessor: BatchProcessor<MyEvent> = new BatchProcessor(components.batchProcessor, {
-  maxBatchSize: 100,
+  immediateFlushThreshold: 100,
   flushIntervalMs: 30000,
   processBatch: internal.myModule.processBatch,
 });
@@ -307,7 +310,9 @@ interface BatchStatusResult {
     lastUpdatedAt: number;
   }>;
   config: {
-    maxBatchSize: number;
+    immediateFlushThreshold?: number;
+    /** @deprecated */
+    maxBatchSize?: number;
     flushIntervalMs: number;
   };
 }

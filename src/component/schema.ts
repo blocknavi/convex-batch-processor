@@ -11,7 +11,9 @@ export default defineSchema({
 		lastUpdatedAt: v.number(),
 		status: v.union(v.literal("accumulating"), v.literal("flushing"), v.literal("completed")),
 		config: v.object({
-			maxBatchSize: v.number(),
+			immediateFlushThreshold: v.optional(v.number()),
+			/** @deprecated Use immediateFlushThreshold instead */
+			maxBatchSize: v.optional(v.number()),
 			flushIntervalMs: v.number(),
 			processBatchHandle: v.string(),
 		}),

@@ -21,7 +21,7 @@ type AnalyticsEvent = typeof analyticsEventValidator.type;
 
 // Create a batch processor for analytics events
 const analyticsBatchProcessor = new BatchProcessor<AnalyticsEvent>(components.batchProcessor, {
-	maxBatchSize: 100,
+	immediateFlushThreshold: 100,
 	flushIntervalMs: 30000,
 	processBatch: internal.usage.sendAnalyticsBatch,
 });

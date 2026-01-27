@@ -26,7 +26,9 @@ export const addItems = mutation({
 		batchId: v.string(),
 		items: v.array(v.any()),
 		config: v.object({
-			maxBatchSize: v.number(),
+			immediateFlushThreshold: v.optional(v.number()),
+			/** @deprecated Use immediateFlushThreshold instead */
+			maxBatchSize: v.optional(v.number()),
 			flushIntervalMs: v.number(),
 			processBatchHandle: v.string(),
 		}),
@@ -94,12 +96,13 @@ export const addItems = mutation({
 		//    multiple concurrent addItems all read the same index.
 		//
 		//    Dual-trigger pattern:
-		//    - SIZE trigger: items.length >= maxBatchSize (handled here)
+		//    - SIZE trigger: items.length >= immediateFlushThreshold (handled here)
 		//    - TIME trigger: flushIntervalMs timer (scheduled at batch creation)
 		//
 		//    For high-throughput small items, the interval timer handles flushing.
 		//    For large single calls, we trigger immediate flush check.
-		if (items.length >= config.maxBatchSize) {
+		const threshold = config.immediateFlushThreshold ?? config.maxBatchSize;
+		if (threshold !== undefined && items.length >= threshold) {
 			await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, {
 				batchDocId: batch._id,
 			});
@@ -232,6 +235,7 @@ export const getBatchStatus = query({
 			batchId: baseBatchId,
 			batches: batchesWithCounts,
 			config: {
+				immediateFlushThreshold: config.immediateFlushThreshold,
 				maxBatchSize: config.maxBatchSize,
 				flushIntervalMs: config.flushIntervalMs,
 			},
@@ -506,7 +510,8 @@ export const doFlushTransition = internalMutation({
 		}
 
 		// Not at threshold? Skip only if not forced (interval flush uses force=true).
-		if (!force && totalCount < batch.config.maxBatchSize) {
+		const threshold = batch.config.immediateFlushThreshold ?? batch.config.maxBatchSize;
+		if (!force && threshold !== undefined && totalCount < threshold) {
 			console.log("[doFlushTransition] EARLY RETURN - below_threshold");
 			return { flushed: false, reason: "below_threshold" };
 		}
@@ -643,7 +648,8 @@ export const recordFlushResult = internalMutation({
 				});
 
 				// Schedule another maybeFlush if at threshold
-				if (remainingCount >= batch.config.maxBatchSize) {
+				const threshold = batch.config.immediateFlushThreshold ?? batch.config.maxBatchSize;
+				if (threshold !== undefined && remainingCount >= threshold) {
 					await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, { batchDocId });
 				} else if (batch.config.flushIntervalMs > 0) {
 					// Re-schedule interval timer
@@ -709,7 +715,7 @@ export const recordFlushResult = internalMutation({
  * scheduledIntervalFlush - Timer-triggered flush that runs after flushIntervalMs.
  *
  * Scheduled once when a batch is created (if flushIntervalMs > 0). Uses force=true
- * to flush regardless of whether the batch has reached maxBatchSize threshold.
+ * to flush regardless of whether the batch has reached immediateFlushThreshold.
  * This ensures batches don't sit indefinitely waiting for more items.
  */
 export const scheduledIntervalFlush = internalAction({

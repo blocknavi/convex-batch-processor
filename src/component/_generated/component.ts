@@ -31,7 +31,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           batchId: string;
           config: {
             flushIntervalMs: number;
-            maxBatchSize: number;
+            immediateFlushThreshold?: number;
+            maxBatchSize?: number;
             processBatchHandle: string;
           };
           items: Array<any>;
