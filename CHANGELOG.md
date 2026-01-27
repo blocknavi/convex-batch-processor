@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Internal: Moved batch items to separate `batchItems` table for append-only writes (no client API changes)
+- Internal: Simplified flush mechanism to leverage Convex's built-in OCC retry instead of external action-retrier
+- Internal: Removed `@convex-dev/action-retrier` dependency (fewer dependencies, simpler architecture)
+- Internal: Removed unused `getBatchItemCount` internal query
 - **BREAKING**: Moved batch processor config from `addItems()` to constructor
   - Before: `new BatchProcessor(component)` then `addItems(ctx, id, items, config)`
   - After: `new BatchProcessor(component, config)` then `addItems(ctx, id, items)`
