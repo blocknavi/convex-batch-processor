@@ -27,16 +27,37 @@ export const addItems = mutation({
 	handler: async (ctx, { batchId, items, config }) => {
 		const now = Date.now();
 
+		// Parse base batch ID (strip sequence if present)
+		const baseBatchId = batchId.includes("::")
+			? batchId.split("::")[0]
+			: batchId;
+
+		// Find an accumulating batch for this base ID
 		let batch = await ctx.db
 			.query("batches")
-			.withIndex("by_batchId", (q) => q.eq("batchId", batchId))
+			.withIndex("by_baseBatchId_status", (q) =>
+				q.eq("baseBatchId", baseBatchId).eq("status", "accumulating")
+			)
 			.first();
 
 		let isNewBatch = false;
 		if (!batch) {
 			isNewBatch = true;
+
+			// Find highest sequence number for this base ID
+			const latestBatch = await ctx.db
+				.query("batches")
+				.withIndex("by_baseBatchId_status", (q) => q.eq("baseBatchId", baseBatchId))
+				.order("desc")
+				.first();
+
+			const nextSequence = latestBatch ? latestBatch.sequence + 1 : 0;
+			const newBatchId = `${baseBatchId}::${nextSequence}`;
+
 			const batchDocId = await ctx.db.insert("batches", {
-				batchId,
+				batchId: newBatchId,
+				baseBatchId,
+				sequence: nextSequence,
 				items: [],
 				itemCount: 0,
 				createdAt: now,
@@ -48,25 +69,7 @@ export const addItems = mutation({
 		}
 
 		if (!batch) {
-			throw new Error(`Failed to create batch ${batchId}`);
-		}
-
-		// Reset completed batches to accumulating so they can accept new items
-		if (batch.status === "completed") {
-			await ctx.db.patch(batch._id, {
-				status: "accumulating",
-				items: [],
-				itemCount: 0,
-				lastUpdatedAt: now,
-			});
-			batch = await ctx.db.get(batch._id);
-			if (!batch) {
-				throw new Error(`Failed to reset batch ${batchId}`);
-			}
-		}
-
-		if (batch.status !== "accumulating") {
-			throw new Error(`Batch ${batchId} is not in accumulating state (current: ${batch.status})`);
+			throw new Error(`Failed to create batch for ${baseBatchId}`);
 		}
 
 		const newItems = [...batch.items, ...items];
@@ -92,7 +95,7 @@ export const addItems = mutation({
 			});
 
 			return {
-				batchId,
+				batchId: baseBatchId,
 				itemCount: newItemCount,
 				flushed: true,
 				status: "flushing",
@@ -122,7 +125,7 @@ export const addItems = mutation({
 		});
 
 		return {
-			batchId,
+			batchId: baseBatchId,
 			itemCount: newItemCount,
 			flushed: false,
 			status: "accumulating",
@@ -133,17 +136,28 @@ export const addItems = mutation({
 export const flushBatch = mutation({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
-		const batch = await ctx.db
+		// First try exact match (for full batch IDs like "base::0")
+		let batch = await ctx.db
 			.query("batches")
 			.withIndex("by_batchId", (q) => q.eq("batchId", batchId))
 			.first();
+
+		// If not found, try as base batch ID and find the accumulating batch
+		if (!batch) {
+			batch = await ctx.db
+				.query("batches")
+				.withIndex("by_baseBatchId_status", (q) =>
+					q.eq("baseBatchId", batchId).eq("status", "accumulating")
+				)
+				.first();
+		}
 
 		if (!batch) {
 			throw new Error(`Batch ${batchId} not found`);
 		}
 
 		if (batch.status !== "accumulating") {
-			throw new Error(`Batch ${batchId} is not in accumulating state (current: ${batch.status})`);
+			throw new Error(`Batch ${batch.baseBatchId} is not in accumulating state (current: ${batch.status})`);
 		}
 
 		if (batch.itemCount === 0) {
@@ -181,23 +195,68 @@ export const flushBatch = mutation({
 export const getBatchStatus = query({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
-		const batch = await ctx.db
-			.query("batches")
-			.withIndex("by_batchId", (q) => q.eq("batchId", batchId))
-			.first();
+		// Parse base batch ID (strip sequence if present)
+		const baseBatchId = batchId.includes("::")
+			? batchId.split("::")[0]
+			: batchId;
 
-		if (!batch) {
+		// Find all active (accumulating or flushing) batches for this base ID
+		const accumulatingBatches = await ctx.db
+			.query("batches")
+			.withIndex("by_baseBatchId_status", (q) =>
+				q.eq("baseBatchId", baseBatchId).eq("status", "accumulating")
+			)
+			.collect();
+
+		const flushingBatches = await ctx.db
+			.query("batches")
+			.withIndex("by_baseBatchId_status", (q) =>
+				q.eq("baseBatchId", baseBatchId).eq("status", "flushing")
+			)
+			.collect();
+
+		const activeBatches = [...flushingBatches, ...accumulatingBatches];
+
+		if (activeBatches.length === 0) {
 			return null;
 		}
 
+		// Use config from any batch (they should all have the same config)
+		const config = activeBatches[0].config;
+
 		return {
+			batchId: baseBatchId,
+			batches: activeBatches.map((batch) => ({
+				status: batch.status as "accumulating" | "flushing",
+				itemCount: batch.itemCount,
+				createdAt: batch.createdAt,
+				lastUpdatedAt: batch.lastUpdatedAt,
+			})),
+			config: {
+				maxBatchSize: config.maxBatchSize,
+				flushIntervalMs: config.flushIntervalMs,
+			},
+		};
+	},
+});
+
+export const getAllBatchesForBaseId = query({
+	args: { baseBatchId: v.string() },
+	handler: async (ctx, { baseBatchId }) => {
+		const batches = await ctx.db
+			.query("batches")
+			.withIndex("by_baseBatchId_status", (q) => q.eq("baseBatchId", baseBatchId))
+			.collect();
+
+		return batches.map((batch) => ({
 			batchId: batch.batchId,
+			baseBatchId: batch.baseBatchId,
+			sequence: batch.sequence,
 			itemCount: batch.itemCount,
 			status: batch.status,
 			createdAt: batch.createdAt,
 			lastUpdatedAt: batch.lastUpdatedAt,
-			config: batch.config,
-		};
+		}));
 	},
 });
 
@@ -309,7 +368,7 @@ export const recordFlushResult = internalMutation({
 		if (!batch) return;
 
 		await ctx.db.insert("flushHistory", {
-			batchId: batch.batchId,
+			batchId: batch.baseBatchId, // Store client's original ID, not internal sequence
 			itemCount,
 			flushedAt: Date.now(),
 			durationMs,
@@ -324,6 +383,21 @@ export const recordFlushResult = internalMutation({
 				itemCount: 0,
 				scheduledFlushId: undefined,
 			});
+
+			// Clean up old completed batches for the same base ID
+			// Keep only the most recent completed batch to reduce clutter
+			const completedBatches = await ctx.db
+				.query("batches")
+				.withIndex("by_baseBatchId_status", (q) =>
+					q.eq("baseBatchId", batch.baseBatchId).eq("status", "completed")
+				)
+				.collect();
+
+			// Sort by sequence number descending and delete all but the most recent
+			const sortedCompleted = completedBatches.sort((a, b) => b.sequence - a.sequence);
+			for (let i = 1; i < sortedCompleted.length; i++) {
+				await ctx.db.delete(sortedCompleted[i]._id);
+			}
 		} else {
 			let scheduledFlushId: typeof batch.scheduledFlushId = undefined;
 			if (batch.config.flushIntervalMs > 0 && batch.config.processBatchHandle) {

@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - After: `new BatchProcessor(component, config)` then `addItems(ctx, id, items)`
 - **BREAKING**: Renamed `onFlush` to `processBatch` for consistency with iterator API
 - **BREAKING**: Removed `OnFlushArgs` type - use `ProcessBatchArgs` instead
+- **BREAKING**: Simplified `BatchResult` - removed `actualBatchId` field (was always identical to `batchId`)
+- **BREAKING**: Redesigned `BatchStatusResult` to support multiple active batches:
+  - Now returns `batches` array showing all active batches (flushing + accumulating)
+  - Removed `baseBatchId` and `sequence` fields (internal implementation details)
+  - Simplified `config` to only include `maxBatchSize` and `flushIntervalMs`
 - Config is optional when only using iterator functionality
 
 ## [0.2.0] - 2025-01-22

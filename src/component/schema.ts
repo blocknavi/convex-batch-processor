@@ -3,7 +3,9 @@ import { v } from "convex/values";
 
 export default defineSchema({
 	batches: defineTable({
-		batchId: v.string(),
+		batchId: v.string(), // Full ID with sequence: "base::0"
+		baseBatchId: v.string(), // Base ID: "base"
+		sequence: v.number(), // Sequence number: 0, 1, 2...
 		items: v.array(v.any()),
 		itemCount: v.number(),
 		createdAt: v.number(),
@@ -17,6 +19,7 @@ export default defineSchema({
 		scheduledFlushId: v.optional(v.id("_scheduled_functions")),
 	})
 		.index("by_batchId", ["batchId"])
+		.index("by_baseBatchId_status", ["baseBatchId", "status"])
 		.index("by_status", ["status"]),
 
 	iteratorJobs: defineTable({
@@ -47,7 +50,7 @@ export default defineSchema({
 		.index("by_status", ["status"]),
 
 	flushHistory: defineTable({
-		batchId: v.string(),
+		batchId: v.string(), // Client's original ID (baseBatchId)
 		itemCount: v.number(),
 		flushedAt: v.number(),
 		durationMs: v.number(),

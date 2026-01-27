@@ -51,7 +51,8 @@ const analyticsEventValidator = v.object({
 type AnalyticsEvent = typeof analyticsEventValidator.type;
 
 // Create a batch processor with config
-const batchProcessor = new BatchProcessor<AnalyticsEvent>(components.batchProcessor, {
+// Note: Explicit type annotation is required when the file also exports Convex functions
+const batchProcessor: BatchProcessor<AnalyticsEvent> = new BatchProcessor(components.batchProcessor, {
   maxBatchSize: 100,
   flushIntervalMs: 30000,
   processBatch: internal.analytics.processEventsBatch,
@@ -261,7 +262,7 @@ The `processBatch` **must be a Convex action** (not a mutation or plain JavaScri
 Pass the function reference directly:
 
 ```typescript
-const batchProcessor = new BatchProcessor(components.batchProcessor, {
+const batchProcessor: BatchProcessor<MyEvent> = new BatchProcessor(components.batchProcessor, {
   maxBatchSize: 100,
   flushIntervalMs: 30000,
   processBatch: internal.myModule.processBatch,
@@ -278,6 +279,41 @@ export const processBatch = internalAction({
   },
 });
 ```
+
+#### BatchResult
+
+Returned by `addItems()`:
+
+```typescript
+interface BatchResult {
+  batchId: string;      // Same ID you passed in
+  itemCount: number;    // Total items in batch
+  flushed: boolean;     // Whether batch was flushed
+  status: BatchStatus;  // "accumulating" | "flushing" | "completed"
+}
+```
+
+#### BatchStatusResult
+
+Returned by `getBatchStatus()`:
+
+```typescript
+interface BatchStatusResult {
+  batchId: string;  // Same ID you passed in
+  batches: Array<{
+    status: "accumulating" | "flushing";
+    itemCount: number;
+    createdAt: number;
+    lastUpdatedAt: number;
+  }>;
+  config: {
+    maxBatchSize: number;
+    flushIntervalMs: number;
+  };
+}
+```
+
+The `batches` array contains all active batches. Typically there's one, but during flush there may be both a flushing batch and a new accumulating batch.
 
 #### IteratorConfig
 
@@ -310,6 +346,28 @@ interface OnCompleteArgs {
   processedCount: number;
 }
 ```
+
+## TypeScript Notes
+
+### Explicit Type Annotation Required
+
+When creating a `BatchProcessor` with config in a file that also exports Convex functions (mutations, queries, actions), you must add an explicit type annotation:
+
+```typescript
+// ✅ Correct - explicit type annotation
+const batchProcessor: BatchProcessor<MyEvent> = new BatchProcessor(components.batchProcessor, {
+  processBatch: internal.myModule.processBatch,
+  // ...
+});
+
+// ❌ Will cause error TS7022
+const batchProcessor = new BatchProcessor<MyEvent>(components.batchProcessor, {
+  processBatch: internal.myModule.processBatch,
+  // ...
+});
+```
+
+This is due to circular type inference: TypeScript can't infer the type because the `internal` API types are generated from your file's exports, creating a circular dependency. The explicit annotation breaks this cycle.
 
 ## Error Handling
 

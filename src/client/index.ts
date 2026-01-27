@@ -60,12 +60,27 @@ export interface FlushResult {
 }
 
 export interface BatchStatusResult {
+	batchId: string; // Client's original ID
+	batches: Array<{
+		status: "accumulating" | "flushing";
+		itemCount: number;
+		createdAt: number;
+		lastUpdatedAt: number;
+	}>;
+	config: {
+		maxBatchSize: number;
+		flushIntervalMs: number;
+	};
+}
+
+export interface BatchListItem {
 	batchId: string;
+	baseBatchId: string;
+	sequence: number;
 	itemCount: number;
 	status: BatchStatus;
 	createdAt: number;
 	lastUpdatedAt: number;
-	config: BatchConfig;
 }
 
 export interface JobResult {
@@ -126,6 +141,12 @@ export interface BatchProcessorAPI {
 			"internal",
 			{ batchId: string; limit?: number },
 			FlushHistoryItem[]
+		>;
+		getAllBatchesForBaseId: FunctionReference<
+			"query",
+			"internal",
+			{ baseBatchId: string },
+			BatchListItem[]
 		>;
 		deleteBatch: FunctionReference<
 			"mutation",
@@ -219,6 +240,13 @@ export class BatchProcessor<T = unknown> {
 		limit?: number,
 	): Promise<FlushHistoryItem[]> {
 		return await ctx.runQuery(this.component.lib.getFlushHistory, { batchId, limit });
+	}
+
+	async getAllBatchesForBaseId(
+		ctx: GenericQueryCtx<any>,
+		baseBatchId: string,
+	): Promise<BatchListItem[]> {
+		return await ctx.runQuery(this.component.lib.getAllBatchesForBaseId, { baseBatchId });
 	}
 
 	async deleteBatch(
