@@ -47,8 +47,26 @@ export const addItems = mutation({
 			batch = await ctx.db.get(batchDocId);
 		}
 
-		if (!batch || batch.status !== "accumulating") {
-			throw new Error(`Batch ${batchId} is not in accumulating state`);
+		if (!batch) {
+			throw new Error(`Failed to create batch ${batchId}`);
+		}
+
+		// Reset completed batches to accumulating so they can accept new items
+		if (batch.status === "completed") {
+			await ctx.db.patch(batch._id, {
+				status: "accumulating",
+				items: [],
+				itemCount: 0,
+				lastUpdatedAt: now,
+			});
+			batch = await ctx.db.get(batch._id);
+			if (!batch) {
+				throw new Error(`Failed to reset batch ${batchId}`);
+			}
+		}
+
+		if (batch.status !== "accumulating") {
+			throw new Error(`Batch ${batchId} is not in accumulating state (current: ${batch.status})`);
 		}
 
 		const newItems = [...batch.items, ...items];
