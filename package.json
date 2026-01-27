@@ -1,6 +1,6 @@
 {
 	"name": "convex-batch-processor",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"description": "Batch processing component for Convex - batch accumulator and table iterator",
 	"repository": {
 		"type": "git",

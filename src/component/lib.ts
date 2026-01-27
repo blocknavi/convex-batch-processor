@@ -58,7 +58,6 @@ export const addItems = mutation({
 				batchId: newBatchId,
 				baseBatchId,
 				sequence: nextSequence,
-				items: [],
 				itemCount: 0,
 				createdAt: now,
 				lastUpdatedAt: now,
@@ -72,8 +71,15 @@ export const addItems = mutation({
 			throw new Error(`Failed to create batch for ${baseBatchId}`);
 		}
 
-		const newItems = [...batch.items, ...items];
-		const newItemCount = newItems.length;
+		// INSERT into batchItems table (append-only, no read required)
+		await ctx.db.insert("batchItems", {
+			batchDocId: batch._id,
+			items,
+			itemCount: items.length,
+			createdAt: now,
+		});
+
+		const newItemCount = batch.itemCount + items.length;
 
 		if (newItemCount >= config.maxBatchSize) {
 			if (batch.scheduledFlushId) {
@@ -81,16 +87,15 @@ export const addItems = mutation({
 			}
 
 			await ctx.db.patch(batch._id, {
-				items: newItems,
 				itemCount: newItemCount,
 				lastUpdatedAt: now,
 				status: "flushing",
+				flushStartedAt: now,
 				scheduledFlushId: undefined,
 			});
 
 			await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
 				batchDocId: batch._id,
-				items: newItems,
 				processBatchHandle: config.processBatchHandle,
 			});
 
@@ -117,7 +122,6 @@ export const addItems = mutation({
 		}
 
 		await ctx.db.patch(batch._id, {
-			items: newItems,
 			itemCount: newItemCount,
 			lastUpdatedAt: now,
 			config,
@@ -136,6 +140,8 @@ export const addItems = mutation({
 export const flushBatch = mutation({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
+		const now = Date.now();
+
 		// First try exact match (for full batch IDs like "base::0")
 		let batch = await ctx.db
 			.query("batches")
@@ -174,12 +180,12 @@ export const flushBatch = mutation({
 
 		await ctx.db.patch(batch._id, {
 			status: "flushing",
+			flushStartedAt: now,
 			scheduledFlushId: undefined,
 		});
 
 		await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
 			batchDocId: batch._id,
-			items: batch.items,
 			processBatchHandle: batch.config.processBatchHandle,
 		});
 
@@ -303,6 +309,15 @@ export const deleteBatch = mutation({
 			await ctx.scheduler.cancel(batch.scheduledFlushId);
 		}
 
+		// Delete associated batchItems
+		const batchItems = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+			.collect();
+		for (const item of batchItems) {
+			await ctx.db.delete(item._id);
+		}
+
 		await ctx.db.delete(batch._id);
 		return { deleted: true };
 	},
@@ -322,16 +337,59 @@ export const getBatch = internalQuery({
 	},
 });
 
+export const collectBatchItems = internalQuery({
+	args: { batchDocId: v.id("batches") },
+	handler: async (ctx, { batchDocId }) => {
+		const batch = await ctx.db.get(batchDocId);
+		if (!batch) {
+			return { items: [], flushStartedAt: undefined };
+		}
+
+		const flushStartedAt = batch.flushStartedAt ?? Date.now();
+
+		// Get all batchItems created before flushStartedAt
+		const batchItemDocs = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId_createdAt", (q) =>
+				q.eq("batchDocId", batchDocId).lt("createdAt", flushStartedAt + 1)
+			)
+			.collect();
+
+		// Flatten all items from the batchItem documents
+		const items: unknown[] = [];
+		for (const doc of batchItemDocs) {
+			items.push(...doc.items);
+		}
+
+		return { items, flushStartedAt };
+	},
+});
+
 export const executeFlush = internalAction({
 	args: {
 		batchDocId: v.id("batches"),
-		items: v.array(v.any()),
 		processBatchHandle: v.string(),
 	},
-	handler: async (ctx, { batchDocId, items, processBatchHandle }) => {
+	handler: async (ctx, { batchDocId, processBatchHandle }) => {
 		const startTime = Date.now();
 		let success = true;
 		let errorMessage: string | undefined;
+
+		// Collect items from batchItems table
+		const { items, flushStartedAt } = await ctx.runQuery(internal.lib.collectBatchItems, {
+			batchDocId,
+		});
+
+		if (items.length === 0) {
+			await ctx.runMutation(internal.lib.recordFlushResult, {
+				batchDocId,
+				itemCount: 0,
+				durationMs: 0,
+				success: true,
+				flushStartedAt,
+			});
+			return { success: true, durationMs: 0 };
+		}
 
 		try {
 			const handle = processBatchHandle as FunctionHandle<"action", { items: unknown[] }>;
@@ -349,6 +407,7 @@ export const executeFlush = internalAction({
 			durationMs,
 			success,
 			errorMessage,
+			flushStartedAt,
 		});
 
 		return { success, errorMessage, durationMs };
@@ -362,8 +421,9 @@ export const recordFlushResult = internalMutation({
 		durationMs: v.number(),
 		success: v.boolean(),
 		errorMessage: v.optional(v.string()),
+		flushStartedAt: v.optional(v.number()),
 	},
-	handler: async (ctx, { batchDocId, itemCount, durationMs, success, errorMessage }) => {
+	handler: async (ctx, { batchDocId, itemCount, durationMs, success, errorMessage, flushStartedAt }) => {
 		const batch = await ctx.db.get(batchDocId);
 		if (!batch) return;
 
@@ -377,10 +437,30 @@ export const recordFlushResult = internalMutation({
 		});
 
 		if (success) {
+			// Delete all batchItems that were included in this flush (created before flushStartedAt)
+			const cutoffTime = flushStartedAt ?? batch.flushStartedAt ?? Date.now();
+			const batchItemsToDelete = await ctx.db
+				.query("batchItems")
+				.withIndex("by_batchDocId_createdAt", (q) =>
+					q.eq("batchDocId", batchDocId).lt("createdAt", cutoffTime + 1)
+				)
+				.collect();
+
+			for (const item of batchItemsToDelete) {
+				await ctx.db.delete(item._id);
+			}
+
+			// Count remaining items (items added during flush)
+			const remainingItems = await ctx.db
+				.query("batchItems")
+				.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batchDocId))
+				.collect();
+			const remainingItemCount = remainingItems.reduce((sum, item) => sum + item.itemCount, 0);
+
 			await ctx.db.patch(batchDocId, {
 				status: "completed",
-				items: [],
-				itemCount: 0,
+				itemCount: remainingItemCount,
+				flushStartedAt: undefined,
 				scheduledFlushId: undefined,
 			});
 
@@ -396,6 +476,14 @@ export const recordFlushResult = internalMutation({
 			// Sort by sequence number descending and delete all but the most recent
 			const sortedCompleted = completedBatches.sort((a, b) => b.sequence - a.sequence);
 			for (let i = 1; i < sortedCompleted.length; i++) {
+				// Also delete batchItems for old completed batches
+				const oldBatchItems = await ctx.db
+					.query("batchItems")
+					.withIndex("by_batchDocId", (q) => q.eq("batchDocId", sortedCompleted[i]._id))
+					.collect();
+				for (const item of oldBatchItems) {
+					await ctx.db.delete(item._id);
+				}
 				await ctx.db.delete(sortedCompleted[i]._id);
 			}
 		} else {
@@ -410,6 +498,7 @@ export const recordFlushResult = internalMutation({
 
 			await ctx.db.patch(batchDocId, {
 				status: "accumulating",
+				flushStartedAt: undefined,
 				scheduledFlushId,
 			});
 		}
@@ -419,6 +508,7 @@ export const recordFlushResult = internalMutation({
 export const markBatchFlushing = internalMutation({
 	args: { batchDocId: v.id("batches") },
 	handler: async (ctx, { batchDocId }) => {
+		const now = Date.now();
 		const batch = await ctx.db.get(batchDocId);
 		if (!batch || batch.status !== "accumulating" || batch.itemCount === 0) {
 			return null;
@@ -426,11 +516,11 @@ export const markBatchFlushing = internalMutation({
 
 		await ctx.db.patch(batchDocId, {
 			status: "flushing",
+			flushStartedAt: now,
 			scheduledFlushId: undefined,
 		});
 
 		return {
-			items: batch.items,
 			processBatchHandle: batch.config.processBatchHandle,
 		};
 	},
@@ -445,7 +535,7 @@ export const scheduledIntervalFlush = internalAction({
 		errorMessage?: string;
 		durationMs?: number;
 	}> => {
-		const batchData: { items: unknown[]; processBatchHandle: string } | null = await ctx.runMutation(internal.lib.markBatchFlushing, {
+		const batchData: { processBatchHandle: string } | null = await ctx.runMutation(internal.lib.markBatchFlushing, {
 			batchDocId,
 		});
 
@@ -455,7 +545,6 @@ export const scheduledIntervalFlush = internalAction({
 
 		const result: { success: boolean; errorMessage?: string; durationMs: number } = await ctx.runAction(internal.lib.executeFlush, {
 			batchDocId,
-			items: batchData.items,
 			processBatchHandle: batchData.processBatchHandle,
 		});
 

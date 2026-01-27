@@ -6,7 +6,6 @@ export default defineSchema({
 		batchId: v.string(), // Full ID with sequence: "base::0"
 		baseBatchId: v.string(), // Base ID: "base"
 		sequence: v.number(), // Sequence number: 0, 1, 2...
-		items: v.array(v.any()),
 		itemCount: v.number(),
 		createdAt: v.number(),
 		lastUpdatedAt: v.number(),
@@ -17,10 +16,20 @@ export default defineSchema({
 			processBatchHandle: v.string(),
 		}),
 		scheduledFlushId: v.optional(v.id("_scheduled_functions")),
+		flushStartedAt: v.optional(v.number()),
 	})
 		.index("by_batchId", ["batchId"])
 		.index("by_baseBatchId_status", ["baseBatchId", "status"])
 		.index("by_status", ["status"]),
+
+	batchItems: defineTable({
+		batchDocId: v.id("batches"),
+		items: v.array(v.any()),
+		itemCount: v.number(),
+		createdAt: v.number(),
+	})
+		.index("by_batchDocId", ["batchDocId"])
+		.index("by_batchDocId_createdAt", ["batchDocId", "createdAt"]),
 
 	iteratorJobs: defineTable({
 		jobId: v.string(),
