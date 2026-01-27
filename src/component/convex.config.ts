@@ -1,3 +1,4 @@
 import { defineComponent } from "convex/server";
 
-export default defineComponent("batchProcessor");
+const component = defineComponent("batchProcessor");
+export default component;

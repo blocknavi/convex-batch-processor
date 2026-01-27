@@ -67,6 +67,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
+      getAllBatchesForBaseId: FunctionReference<
+        "query",
+        "internal",
+        { baseBatchId: string },
+        any,
+        Name
+      >;
       getBatchStatus: FunctionReference<
         "query",
         "internal",

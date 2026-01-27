@@ -6,7 +6,7 @@ export default defineSchema({
 		batchId: v.string(), // Full ID with sequence: "base::0"
 		baseBatchId: v.string(), // Base ID: "base"
 		sequence: v.number(), // Sequence number: 0, 1, 2...
-		itemCount: v.number(),
+		// itemCount is computed on-demand from batchItems table
 		createdAt: v.number(),
 		lastUpdatedAt: v.number(),
 		status: v.union(v.literal("accumulating"), v.literal("flushing"), v.literal("completed")),
@@ -20,6 +20,7 @@ export default defineSchema({
 	})
 		.index("by_batchId", ["batchId"])
 		.index("by_baseBatchId_status", ["baseBatchId", "status"])
+		.index("by_baseBatchId_sequence", ["baseBatchId", "sequence"])
 		.index("by_status", ["status"]),
 
 	batchItems: defineTable({

@@ -32,7 +32,7 @@ export const addItems = mutation({
 			? batchId.split("::")[0]
 			: batchId;
 
-		// Find an accumulating batch for this base ID
+		// 1. Find accumulating batch (READ only)
 		let batch = await ctx.db
 			.query("batches")
 			.withIndex("by_baseBatchId_status", (q) =>
@@ -40,14 +40,12 @@ export const addItems = mutation({
 			)
 			.first();
 
-		let isNewBatch = false;
+		// 2. If no batch, create one WITH timer (one-time INSERT)
 		if (!batch) {
-			isNewBatch = true;
-
 			// Find highest sequence number for this base ID
 			const latestBatch = await ctx.db
 				.query("batches")
-				.withIndex("by_baseBatchId_status", (q) => q.eq("baseBatchId", baseBatchId))
+				.withIndex("by_baseBatchId_sequence", (q) => q.eq("baseBatchId", baseBatchId))
 				.order("desc")
 				.first();
 
@@ -58,20 +56,25 @@ export const addItems = mutation({
 				batchId: newBatchId,
 				baseBatchId,
 				sequence: nextSequence,
-				itemCount: 0,
 				createdAt: now,
 				lastUpdatedAt: now,
 				status: "accumulating",
 				config,
 			});
-			batch = await ctx.db.get(batchDocId);
+			batch = (await ctx.db.get(batchDocId))!;
+
+			// Schedule timer at creation (not on every add)
+			if (config.flushIntervalMs > 0) {
+				const scheduledFlushId = await ctx.scheduler.runAfter(
+					config.flushIntervalMs,
+					internal.lib.scheduledIntervalFlush,
+					{ batchDocId: batch._id }
+				);
+				await ctx.db.patch(batch._id, { scheduledFlushId });
+			}
 		}
 
-		if (!batch) {
-			throw new Error(`Failed to create batch for ${baseBatchId}`);
-		}
-
-		// INSERT into batchItems table (append-only, no read required)
+		// 3. INSERT items (NEVER conflicts - always a new document)
 		await ctx.db.insert("batchItems", {
 			batchDocId: batch._id,
 			items,
@@ -79,59 +82,26 @@ export const addItems = mutation({
 			createdAt: now,
 		});
 
-		const newItemCount = batch.itemCount + items.length;
+		// 4. Query total count (READ only)
+		const batchItemDocs = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+			.collect();
+		const totalCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
 
-		if (newItemCount >= config.maxBatchSize) {
-			if (batch.scheduledFlushId) {
-				await ctx.scheduler.cancel(batch.scheduledFlushId);
-			}
-
-			await ctx.db.patch(batch._id, {
-				itemCount: newItemCount,
-				lastUpdatedAt: now,
-				status: "flushing",
-				flushStartedAt: now,
-				scheduledFlushId: undefined,
-			});
-
-			await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
+		// 5. If threshold reached, schedule background flush check (NON-BLOCKING)
+		//    DO NOT patch batch here - let maybeFlush handle it
+		if (totalCount >= config.maxBatchSize) {
+			await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, {
 				batchDocId: batch._id,
-				processBatchHandle: config.processBatchHandle,
 			});
-
-			return {
-				batchId: baseBatchId,
-				itemCount: newItemCount,
-				flushed: true,
-				status: "flushing",
-			};
 		}
 
-		let scheduledFlushId = batch.scheduledFlushId;
-		const shouldScheduleFlush =
-			config.flushIntervalMs > 0 &&
-			!scheduledFlushId &&
-			(isNewBatch || batch.itemCount === 0);
-
-		if (shouldScheduleFlush) {
-			scheduledFlushId = await ctx.scheduler.runAfter(
-				config.flushIntervalMs,
-				internal.lib.scheduledIntervalFlush,
-				{ batchDocId: batch._id }
-			);
-		}
-
-		await ctx.db.patch(batch._id, {
-			itemCount: newItemCount,
-			lastUpdatedAt: now,
-			config,
-			scheduledFlushId,
-		});
-
+		// 6. Return success - NO PATCH to existing batch!
 		return {
 			batchId: baseBatchId,
-			itemCount: newItemCount,
-			flushed: false,
+			itemCount: totalCount,
+			flushed: false, // We don't know yet - maybeFlush will handle it
 			status: "accumulating",
 		};
 	},
@@ -140,8 +110,6 @@ export const addItems = mutation({
 export const flushBatch = mutation({
 	args: { batchId: v.string() },
 	handler: async (ctx, { batchId }) => {
-		const now = Date.now();
-
 		// First try exact match (for full batch IDs like "base::0")
 		let batch = await ctx.db
 			.query("batches")
@@ -166,7 +134,14 @@ export const flushBatch = mutation({
 			throw new Error(`Batch ${batch.baseBatchId} is not in accumulating state (current: ${batch.status})`);
 		}
 
-		if (batch.itemCount === 0) {
+		// Compute item count from batchItems
+		const batchItemDocs = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+			.collect();
+		const itemCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
+
+		if (itemCount === 0) {
 			return { batchId, itemCount: 0, flushed: false, reason: "Batch is empty" };
 		}
 
@@ -174,25 +149,17 @@ export const flushBatch = mutation({
 			throw new Error(`Batch ${batchId} has no processBatchHandle configured`);
 		}
 
-		if (batch.scheduledFlushId) {
-			await ctx.scheduler.cancel(batch.scheduledFlushId);
-		}
-
-		await ctx.db.patch(batch._id, {
-			status: "flushing",
-			flushStartedAt: now,
-			scheduledFlushId: undefined,
-		});
-
-		await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
+		// Schedule maybeFlush to handle the transition (avoids OCC in user-facing mutation)
+		// Pass force: true to bypass threshold check for manual flushes
+		await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, {
 			batchDocId: batch._id,
-			processBatchHandle: batch.config.processBatchHandle,
+			force: true,
 		});
 
 		return {
 			batchId,
-			itemCount: batch.itemCount,
-			flushed: true,
+			itemCount,
+			flushed: true, // Will be flushed by maybeFlush
 			status: "flushing",
 		};
 	},
@@ -230,14 +197,30 @@ export const getBatchStatus = query({
 		// Use config from any batch (they should all have the same config)
 		const config = activeBatches[0].config;
 
+		// Compute itemCount and lastUpdatedAt from batchItems for each batch
+		const batchesWithCounts = await Promise.all(
+			activeBatches.map(async (batch) => {
+				const batchItemDocs = await ctx.db
+					.query("batchItems")
+					.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+					.collect();
+				const itemCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
+				// Compute lastUpdatedAt as max of batchItems.createdAt, or fall back to batch.lastUpdatedAt
+				const lastUpdatedAt = batchItemDocs.length > 0
+					? Math.max(...batchItemDocs.map((doc) => doc.createdAt))
+					: batch.lastUpdatedAt;
+				return {
+					status: batch.status as "accumulating" | "flushing",
+					itemCount,
+					createdAt: batch.createdAt,
+					lastUpdatedAt,
+				};
+			})
+		);
+
 		return {
 			batchId: baseBatchId,
-			batches: activeBatches.map((batch) => ({
-				status: batch.status as "accumulating" | "flushing",
-				itemCount: batch.itemCount,
-				createdAt: batch.createdAt,
-				lastUpdatedAt: batch.lastUpdatedAt,
-			})),
+			batches: batchesWithCounts,
 			config: {
 				maxBatchSize: config.maxBatchSize,
 				flushIntervalMs: config.flushIntervalMs,
@@ -254,15 +237,30 @@ export const getAllBatchesForBaseId = query({
 			.withIndex("by_baseBatchId_status", (q) => q.eq("baseBatchId", baseBatchId))
 			.collect();
 
-		return batches.map((batch) => ({
-			batchId: batch.batchId,
-			baseBatchId: batch.baseBatchId,
-			sequence: batch.sequence,
-			itemCount: batch.itemCount,
-			status: batch.status,
-			createdAt: batch.createdAt,
-			lastUpdatedAt: batch.lastUpdatedAt,
-		}));
+		// Compute itemCount and lastUpdatedAt from batchItems for each batch
+		return Promise.all(
+			batches.map(async (batch) => {
+				const batchItemDocs = await ctx.db
+					.query("batchItems")
+					.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+					.collect();
+				const itemCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
+				// Compute lastUpdatedAt as max of batchItems.createdAt, or fall back to batch.lastUpdatedAt
+				const lastUpdatedAt =
+					batchItemDocs.length > 0
+						? Math.max(...batchItemDocs.map((doc) => doc.createdAt))
+						: batch.lastUpdatedAt;
+				return {
+					batchId: batch.batchId,
+					baseBatchId: batch.baseBatchId,
+					sequence: batch.sequence,
+					itemCount,
+					status: batch.status,
+					createdAt: batch.createdAt,
+					lastUpdatedAt,
+				};
+			})
+		);
 	},
 });
 
@@ -301,7 +299,14 @@ export const deleteBatch = mutation({
 			return { deleted: false, reason: "Cannot delete batch while flushing" };
 		}
 
-		if (batch.status === "accumulating" && batch.itemCount > 0) {
+		// Compute item count from batchItems
+		const batchItems = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
+			.collect();
+		const itemCount = batchItems.reduce((sum, doc) => sum + doc.itemCount, 0);
+
+		if (batch.status === "accumulating" && itemCount > 0) {
 			return { deleted: false, reason: "Cannot delete batch with pending items" };
 		}
 
@@ -310,10 +315,6 @@ export const deleteBatch = mutation({
 		}
 
 		// Delete associated batchItems
-		const batchItems = await ctx.db
-			.query("batchItems")
-			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
-			.collect();
 		for (const item of batchItems) {
 			await ctx.db.delete(item._id);
 		}
@@ -362,6 +363,135 @@ export const collectBatchItems = internalQuery({
 		}
 
 		return { items, flushStartedAt };
+	},
+});
+
+// Type for flush transition result
+type FlushTransitionResult =
+	| { flushed: true; itemCount: number }
+	| { flushed: false; reason: string };
+
+/**
+ * maybeFlush - Attempts to transition a batch from "accumulating" to "flushing" state.
+ *
+ * This is an internal action scheduled by addItems (when threshold is reached) or
+ * flushBatch (for manual flushes). It serves as a lightweight coordinator that
+ * delegates the actual state transition to doFlushTransition (a mutation).
+ *
+ * ## Why this architecture?
+ *
+ * 1. **OCC is handled automatically by Convex**: When doFlushTransition (a mutation)
+ *    encounters an OCC conflict, Convex automatically retries it. We don't need
+ *    external retry logic like ActionRetrier for database operations.
+ *
+ * 2. **Race conditions are handled gracefully**: Multiple maybeFlush calls can be
+ *    scheduled concurrently (e.g., rapid addItems calls all hitting threshold).
+ *    The first one to execute wins the race and transitions the batch to "flushing".
+ *    Subsequent calls see status !== "accumulating" and return early with
+ *    reason: "not_accumulating". This is expected behavior, not an error.
+ *
+ * 3. **Mutations can't call actions directly**: Convex mutations are deterministic
+ *    and can't have side effects. To execute the user's processBatchHandle (an action),
+ *    we need this action layer. The flow is:
+ *      mutation (addItems) → schedules action (maybeFlush)
+ *      action (maybeFlush) → calls mutation (doFlushTransition)
+ *      mutation (doFlushTransition) → schedules action (executeFlush)
+ *
+ * 4. **Non-blocking for callers**: addItems returns immediately after scheduling
+ *    maybeFlush. Users don't wait for the flush to complete.
+ *
+ * ## Failure scenarios
+ *
+ * - If maybeFlush fails completely (rare), the batch stays in "accumulating" state.
+ *   The next addItems call that hits threshold will schedule another maybeFlush.
+ * - If a scheduled interval flush exists, it will also attempt the transition.
+ *
+ * @param batchDocId - The batch document ID to potentially flush
+ * @param force - If true, flush regardless of threshold (used by manual flush and interval timer)
+ */
+export const maybeFlush = internalAction({
+	args: {
+		batchDocId: v.id("batches"),
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { batchDocId, force }): Promise<void> => {
+		// Call the mutation directly - Convex handles OCC retries automatically.
+		// If another maybeFlush already transitioned this batch, the mutation
+		// returns { flushed: false, reason: "not_accumulating" } which is fine.
+		await ctx.runMutation(internal.lib.doFlushTransition, {
+			batchDocId,
+			force: force ?? false,
+		});
+	},
+});
+
+/**
+ * doFlushTransition - The actual state machine transition from "accumulating" to "flushing".
+ *
+ * This mutation is the source of truth for batch state transitions. It's designed to be
+ * idempotent and race-condition safe:
+ *
+ * - Returns early if batch is already flushing/completed (another caller won the race)
+ * - Returns early if batch is empty or below threshold (unless force=true)
+ * - On success, atomically updates status and schedules executeFlush
+ *
+ * OCC (Optimistic Concurrency Control) note:
+ * If two doFlushTransition calls race, Convex detects the conflict when both try to
+ * patch the same batch document. One succeeds, the other is auto-retried by Convex.
+ * On retry, it sees status="flushing" and returns { flushed: false, reason: "not_accumulating" }.
+ */
+export const doFlushTransition = internalMutation({
+	args: {
+		batchDocId: v.id("batches"),
+		force: v.optional(v.boolean()),
+	},
+	handler: async (ctx, { batchDocId, force }): Promise<FlushTransitionResult> => {
+		const batch = await ctx.db.get(batchDocId);
+
+		// Already flushing or completed? Nothing to do. This handles the race condition
+		// where multiple maybeFlush calls are scheduled - the first one wins.
+		if (!batch || batch.status !== "accumulating") {
+			return { flushed: false, reason: "not_accumulating" };
+		}
+
+		// Check actual count from batchItems
+		const batchItemDocs = await ctx.db
+			.query("batchItems")
+			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batchDocId))
+			.collect();
+		const totalCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
+
+		// Empty batch? Nothing to flush.
+		if (totalCount === 0) {
+			return { flushed: false, reason: "empty" };
+		}
+
+		// Not at threshold? Skip only if not forced (interval flush uses force=true).
+		if (!force && totalCount < batch.config.maxBatchSize) {
+			return { flushed: false, reason: "below_threshold" };
+		}
+
+		// Cancel scheduled timer if exists
+		if (batch.scheduledFlushId) {
+			await ctx.scheduler.cancel(batch.scheduledFlushId);
+		}
+
+		// Transition to flushing
+		const now = Date.now();
+		await ctx.db.patch(batchDocId, {
+			status: "flushing",
+			flushStartedAt: now,
+			lastUpdatedAt: now,
+			scheduledFlushId: undefined,
+		});
+
+		// Schedule the actual flush
+		await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
+			batchDocId,
+			processBatchHandle: batch.config.processBatchHandle,
+		});
+
+		return { flushed: true, itemCount: totalCount };
 	},
 });
 
@@ -450,43 +580,66 @@ export const recordFlushResult = internalMutation({
 				await ctx.db.delete(item._id);
 			}
 
-			// Count remaining items (items added during flush)
+			// Check for stranded items (added after flushStartedAt)
 			const remainingItems = await ctx.db
 				.query("batchItems")
 				.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batchDocId))
 				.collect();
-			const remainingItemCount = remainingItems.reduce((sum, item) => sum + item.itemCount, 0);
+			const remainingCount = remainingItems.reduce((sum, item) => sum + item.itemCount, 0);
 
-			await ctx.db.patch(batchDocId, {
-				status: "completed",
-				itemCount: remainingItemCount,
-				flushStartedAt: undefined,
-				scheduledFlushId: undefined,
-			});
+			if (remainingCount > 0) {
+				// Don't complete - keep accumulating for stranded items
+				await ctx.db.patch(batchDocId, {
+					status: "accumulating",
+					flushStartedAt: undefined,
+					lastUpdatedAt: Date.now(),
+				});
 
-			// Clean up old completed batches for the same base ID
-			// Keep only the most recent completed batch to reduce clutter
-			const completedBatches = await ctx.db
-				.query("batches")
-				.withIndex("by_baseBatchId_status", (q) =>
-					q.eq("baseBatchId", batch.baseBatchId).eq("status", "completed")
-				)
-				.collect();
-
-			// Sort by sequence number descending and delete all but the most recent
-			const sortedCompleted = completedBatches.sort((a, b) => b.sequence - a.sequence);
-			for (let i = 1; i < sortedCompleted.length; i++) {
-				// Also delete batchItems for old completed batches
-				const oldBatchItems = await ctx.db
-					.query("batchItems")
-					.withIndex("by_batchDocId", (q) => q.eq("batchDocId", sortedCompleted[i]._id))
-					.collect();
-				for (const item of oldBatchItems) {
-					await ctx.db.delete(item._id);
+				// Schedule another maybeFlush if at threshold
+				if (remainingCount >= batch.config.maxBatchSize) {
+					await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, { batchDocId });
+				} else if (batch.config.flushIntervalMs > 0) {
+					// Re-schedule interval timer
+					const scheduledFlushId = await ctx.scheduler.runAfter(
+						batch.config.flushIntervalMs,
+						internal.lib.scheduledIntervalFlush,
+						{ batchDocId }
+					);
+					await ctx.db.patch(batchDocId, { scheduledFlushId });
 				}
-				await ctx.db.delete(sortedCompleted[i]._id);
+			} else {
+				// No stranded items - mark completed
+				await ctx.db.patch(batchDocId, {
+					status: "completed",
+					flushStartedAt: undefined,
+					lastUpdatedAt: Date.now(),
+				});
+
+				// Clean up old completed batches for the same base ID
+				// Keep only the most recent completed batch to reduce clutter
+				const completedBatches = await ctx.db
+					.query("batches")
+					.withIndex("by_baseBatchId_status", (q) =>
+						q.eq("baseBatchId", batch.baseBatchId).eq("status", "completed")
+					)
+					.collect();
+
+				// Sort by sequence number descending and delete all but the most recent
+				const sortedCompleted = completedBatches.sort((a, b) => b.sequence - a.sequence);
+				for (let i = 1; i < sortedCompleted.length; i++) {
+					// Also delete batchItems for old completed batches
+					const oldBatchItems = await ctx.db
+						.query("batchItems")
+						.withIndex("by_batchDocId", (q) => q.eq("batchDocId", sortedCompleted[i]._id))
+						.collect();
+					for (const item of oldBatchItems) {
+						await ctx.db.delete(item._id);
+					}
+					await ctx.db.delete(sortedCompleted[i]._id);
+				}
 			}
 		} else {
+			// Failure case - revert to accumulating
 			let scheduledFlushId: typeof batch.scheduledFlushId = undefined;
 			if (batch.config.flushIntervalMs > 0 && batch.config.processBatchHandle) {
 				scheduledFlushId = await ctx.scheduler.runAfter(
@@ -505,50 +658,21 @@ export const recordFlushResult = internalMutation({
 	},
 });
 
-export const markBatchFlushing = internalMutation({
-	args: { batchDocId: v.id("batches") },
-	handler: async (ctx, { batchDocId }) => {
-		const now = Date.now();
-		const batch = await ctx.db.get(batchDocId);
-		if (!batch || batch.status !== "accumulating" || batch.itemCount === 0) {
-			return null;
-		}
-
-		await ctx.db.patch(batchDocId, {
-			status: "flushing",
-			flushStartedAt: now,
-			scheduledFlushId: undefined,
-		});
-
-		return {
-			processBatchHandle: batch.config.processBatchHandle,
-		};
-	},
-});
-
+/**
+ * scheduledIntervalFlush - Timer-triggered flush that runs after flushIntervalMs.
+ *
+ * Scheduled once when a batch is created (if flushIntervalMs > 0). Uses force=true
+ * to flush regardless of whether the batch has reached maxBatchSize threshold.
+ * This ensures batches don't sit indefinitely waiting for more items.
+ */
 export const scheduledIntervalFlush = internalAction({
 	args: { batchDocId: v.id("batches") },
-	handler: async (ctx, { batchDocId }): Promise<{
-		flushed: boolean;
-		reason?: string;
-		success?: boolean;
-		errorMessage?: string;
-		durationMs?: number;
-	}> => {
-		const batchData: { processBatchHandle: string } | null = await ctx.runMutation(internal.lib.markBatchFlushing, {
+	handler: async (ctx, { batchDocId }): Promise<void> => {
+		// Use force=true to flush regardless of threshold
+		await ctx.runMutation(internal.lib.doFlushTransition, {
 			batchDocId,
+			force: true,
 		});
-
-		if (!batchData || !batchData.processBatchHandle) {
-			return { flushed: false, reason: "Batch not ready for flush" };
-		}
-
-		const result: { success: boolean; errorMessage?: string; durationMs: number } = await ctx.runAction(internal.lib.executeFlush, {
-			batchDocId,
-			processBatchHandle: batchData.processBatchHandle,
-		});
-
-		return { flushed: true, ...result };
 	},
 });
 
