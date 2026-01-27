@@ -1,6 +1,6 @@
 {
 	"name": "convex-batch-processor",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Batch processing component for Convex - batch accumulator and table iterator",
 	"repository": {
 		"type": "git",
@@ -11,7 +11,14 @@
 		"url": "https://github.com/blocknavi/convex-batch-processor/issues"
 	},
 	"license": "MIT",
-	"keywords": ["convex", "component", "batch", "processing", "iterator", "accumulator"],
+	"keywords": [
+		"convex",
+		"component",
+		"batch",
+		"processing",
+		"iterator",
+		"accumulator"
+	],
 	"type": "module",
 	"scripts": {
 		"codegen": "npx convex codegen --component-dir src/component",
@@ -27,7 +34,10 @@
 		"alpha": "npm version prerelease --preid alpha && npm publish --tag alpha && git push --follow-tags",
 		"release": "npm version patch && npm publish && git push --follow-tags"
 	},
-	"files": ["dist", "src"],
+	"files": [
+		"dist",
+		"src"
+	],
 	"exports": {
 		"./package.json": "./package.json",
 		".": {
