@@ -10,6 +10,13 @@ import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { FunctionHandle } from "convex/server";
 
+// Declare console for TypeScript (available at runtime in Convex)
+declare const console: {
+	log: (...args: unknown[]) => void;
+	error: (...args: unknown[]) => void;
+	warn: (...args: unknown[]) => void;
+};
+
 // ============================================================================
 // Batch Accumulator - Public API
 // ============================================================================
@@ -67,8 +74,8 @@ export const addItems = mutation({
 			if (config.flushIntervalMs > 0) {
 				const scheduledFlushId = await ctx.scheduler.runAfter(
 					config.flushIntervalMs,
-					internal.lib.scheduledIntervalFlush,
-					{ batchDocId: batch._id }
+					internal.lib.maybeFlush,
+					{ batchDocId: batch._id, force: true }
 				);
 				await ctx.db.patch(batch._id, { scheduledFlushId });
 			}
@@ -371,7 +378,7 @@ export const collectBatchItems = internalQuery({
 
 // Type for flush transition result
 type FlushTransitionResult =
-	| { flushed: true; itemCount: number }
+	| { flushed: true; itemCount: number; processBatchHandle: string }
 	| { flushed: false; reason: string };
 
 /**
@@ -418,13 +425,28 @@ export const maybeFlush = internalAction({
 		force: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { batchDocId, force }): Promise<void> => {
+		console.log("[maybeFlush] START", { batchDocId, force });
+
 		// Call the mutation directly - Convex handles OCC retries automatically.
 		// If another maybeFlush already transitioned this batch, the mutation
 		// returns { flushed: false, reason: "not_accumulating" } which is fine.
-		await ctx.runMutation(internal.lib.doFlushTransition, {
+		const result = await ctx.runMutation(internal.lib.doFlushTransition, {
 			batchDocId,
 			force: force ?? false,
 		});
+
+		console.log("[maybeFlush] doFlushTransition result", result);
+
+		// If the transition succeeded, execute the flush directly
+		// (Scheduling from mutation was unreliable in component context)
+		if (result.flushed) {
+			console.log("[maybeFlush] Calling executeFlush directly");
+			await ctx.runAction(internal.lib.executeFlush, {
+				batchDocId,
+				processBatchHandle: result.processBatchHandle,
+			});
+			console.log("[maybeFlush] executeFlush completed");
+		}
 	},
 });
 
@@ -436,7 +458,11 @@ export const maybeFlush = internalAction({
  *
  * - Returns early if batch is already flushing/completed (another caller won the race)
  * - Returns early if batch is empty or below threshold (unless force=true)
- * - On success, atomically updates status and schedules executeFlush
+ * - On success, atomically updates status and returns processBatchHandle for caller to execute
+ *
+ * Note: This mutation returns the processBatchHandle instead of scheduling executeFlush.
+ * The calling action (maybeFlush) is responsible for calling executeFlush directly.
+ * This design avoids issues with scheduling actions from within component mutations.
  *
  * OCC (Optimistic Concurrency Control) note:
  * If two doFlushTransition calls race, Convex detects the conflict when both try to
@@ -449,11 +475,19 @@ export const doFlushTransition = internalMutation({
 		force: v.optional(v.boolean()),
 	},
 	handler: async (ctx, { batchDocId, force }): Promise<FlushTransitionResult> => {
+		console.log("[doFlushTransition] START", { batchDocId, force });
+
 		const batch = await ctx.db.get(batchDocId);
+		console.log("[doFlushTransition] Batch state", {
+			exists: !!batch,
+			status: batch?.status,
+			scheduledFlushId: batch?.scheduledFlushId
+		});
 
 		// Already flushing or completed? Nothing to do. This handles the race condition
 		// where multiple maybeFlush calls are scheduled - the first one wins.
 		if (!batch || batch.status !== "accumulating") {
+			console.log("[doFlushTransition] EARLY RETURN - not_accumulating");
 			return { flushed: false, reason: "not_accumulating" };
 		}
 
@@ -463,19 +497,23 @@ export const doFlushTransition = internalMutation({
 			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batchDocId))
 			.collect();
 		const totalCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
+		console.log("[doFlushTransition] Item count", { totalCount, batchItemDocs: batchItemDocs.length });
 
 		// Empty batch? Nothing to flush.
 		if (totalCount === 0) {
+			console.log("[doFlushTransition] EARLY RETURN - empty");
 			return { flushed: false, reason: "empty" };
 		}
 
 		// Not at threshold? Skip only if not forced (interval flush uses force=true).
 		if (!force && totalCount < batch.config.maxBatchSize) {
+			console.log("[doFlushTransition] EARLY RETURN - below_threshold");
 			return { flushed: false, reason: "below_threshold" };
 		}
 
 		// Cancel scheduled timer if exists
 		if (batch.scheduledFlushId) {
+			console.log("[doFlushTransition] Cancelling scheduled timer", batch.scheduledFlushId);
 			await ctx.scheduler.cancel(batch.scheduledFlushId);
 		}
 
@@ -487,14 +525,16 @@ export const doFlushTransition = internalMutation({
 			lastUpdatedAt: now,
 			scheduledFlushId: undefined,
 		});
+		console.log("[doFlushTransition] Patched batch to flushing");
 
-		// Schedule the actual flush
-		await ctx.scheduler.runAfter(0, internal.lib.executeFlush, {
-			batchDocId,
-			processBatchHandle: batch.config.processBatchHandle,
-		});
-
-		return { flushed: true, itemCount: totalCount };
+		// Return the processBatchHandle so maybeFlush can call executeFlush directly
+		// (Scheduling from mutation was unreliable in component context)
+		console.log("[doFlushTransition] Returning processBatchHandle for direct execution");
+		return {
+			flushed: true,
+			itemCount: totalCount,
+			processBatchHandle: batch.config.processBatchHandle
+		};
 	},
 });
 
@@ -504,14 +544,18 @@ export const executeFlush = internalAction({
 		processBatchHandle: v.string(),
 	},
 	handler: async (ctx, { batchDocId, processBatchHandle }) => {
+		console.log("[executeFlush] ENTERED", { batchDocId, processBatchHandle });
+
 		const startTime = Date.now();
 		let success = true;
 		let errorMessage: string | undefined;
 
 		// Collect items from batchItems table
+		console.log("[executeFlush] Collecting batch items...");
 		const { items, flushStartedAt } = await ctx.runQuery(internal.lib.collectBatchItems, {
 			batchDocId,
 		});
+		console.log("[executeFlush] Collected items", { count: items.length });
 
 		if (items.length === 0) {
 			await ctx.runMutation(internal.lib.recordFlushResult, {
@@ -605,8 +649,8 @@ export const recordFlushResult = internalMutation({
 					// Re-schedule interval timer
 					const scheduledFlushId = await ctx.scheduler.runAfter(
 						batch.config.flushIntervalMs,
-						internal.lib.scheduledIntervalFlush,
-						{ batchDocId }
+						internal.lib.maybeFlush,
+						{ batchDocId, force: true }
 					);
 					await ctx.db.patch(batchDocId, { scheduledFlushId });
 				}
@@ -647,8 +691,8 @@ export const recordFlushResult = internalMutation({
 			if (batch.config.flushIntervalMs > 0 && batch.config.processBatchHandle) {
 				scheduledFlushId = await ctx.scheduler.runAfter(
 					batch.config.flushIntervalMs,
-					internal.lib.scheduledIntervalFlush,
-					{ batchDocId }
+					internal.lib.maybeFlush,
+					{ batchDocId, force: true }
 				);
 			}
 

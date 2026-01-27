@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-01-27
+
 ### Fixed
 - Fixed `BatchProcessorAPI` type to use `"internal"` visibility instead of `"public"` to match Convex-generated component APIs
 - **Fixed OCC conflicts in high-throughput scenarios**: Removed batchItems count query from `addItems` mutation. Now uses dual-trigger pattern:
   - **Time trigger**: Interval timer flushes after `flushIntervalMs` (handles accumulating small items)
   - **Size trigger**: Immediate flush when single call adds `>= maxBatchSize` items (handles large batches)
+- Fixed action scheduling reliability in component context by calling `executeFlush` directly from `maybeFlush` instead of scheduling
 
 ### Changed
 - **BREAKING**: `addItems()` now returns `itemCount` as the number of items added in THIS call, not the total count. Use `getBatchStatus()` to get total counts if needed.
