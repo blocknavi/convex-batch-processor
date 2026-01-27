@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed `BatchProcessorAPI` type to use `"internal"` visibility instead of `"public"` to match Convex-generated component APIs
+- **Fixed OCC conflicts in high-throughput scenarios**: Removed batchItems count query from `addItems` mutation. Now uses dual-trigger pattern:
+  - **Time trigger**: Interval timer flushes after `flushIntervalMs` (handles accumulating small items)
+  - **Size trigger**: Immediate flush when single call adds `>= maxBatchSize` items (handles large batches)
 
 ### Changed
+- **BREAKING**: `addItems()` now returns `itemCount` as the number of items added in THIS call, not the total count. Use `getBatchStatus()` to get total counts if needed.
 - Internal: Moved batch items to separate `batchItems` table for append-only writes (no client API changes)
 - Internal: Simplified flush mechanism to leverage Convex's built-in OCC retry instead of external action-retrier
 - Internal: Removed `@convex-dev/action-retrier` dependency (fewer dependencies, simpler architecture)

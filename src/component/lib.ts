@@ -82,26 +82,29 @@ export const addItems = mutation({
 			createdAt: now,
 		});
 
-		// 4. Query total count (READ only)
-		const batchItemDocs = await ctx.db
-			.query("batchItems")
-			.withIndex("by_batchDocId", (q) => q.eq("batchDocId", batch._id))
-			.collect();
-		const totalCount = batchItemDocs.reduce((sum, doc) => sum + doc.itemCount, 0);
-
-		// 5. If threshold reached, schedule background flush check (NON-BLOCKING)
-		//    DO NOT patch batch here - let maybeFlush handle it
-		if (totalCount >= config.maxBatchSize) {
+		// 4. Schedule flush check ONLY if this single call could complete a batch
+		//    DO NOT query batchItems to count - that causes OCC conflicts when
+		//    multiple concurrent addItems all read the same index.
+		//
+		//    Dual-trigger pattern:
+		//    - SIZE trigger: items.length >= maxBatchSize (handled here)
+		//    - TIME trigger: flushIntervalMs timer (scheduled at batch creation)
+		//
+		//    For high-throughput small items, the interval timer handles flushing.
+		//    For large single calls, we trigger immediate flush check.
+		if (items.length >= config.maxBatchSize) {
 			await ctx.scheduler.runAfter(0, internal.lib.maybeFlush, {
 				batchDocId: batch._id,
 			});
 		}
 
-		// 6. Return success - NO PATCH to existing batch!
+		// 5. Return success - NO PATCH, NO COUNT QUERY!
+		//    We return the count of items added in THIS call only.
+		//    Total count can be obtained via getBatchStatus query if needed.
 		return {
 			batchId: baseBatchId,
-			itemCount: totalCount,
-			flushed: false, // We don't know yet - maybeFlush will handle it
+			itemCount: items.length,
+			flushed: false, // Flush happens via interval timer or large batch detection
 			status: "accumulating",
 		};
 	},

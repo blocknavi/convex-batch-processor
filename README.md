@@ -31,8 +31,8 @@ export default app;
 ### Batch Accumulator
 
 The batch accumulator collects items and flushes them based on:
-- **Size threshold**: Flush when `maxBatchSize` items collected
-- **Time interval**: Flush automatically after `flushIntervalMs` since first item was added
+- **Time interval**: Flush automatically after `flushIntervalMs` (primary trigger for high-throughput small items)
+- **Size threshold**: Immediate flush when a single call adds `>= maxBatchSize` items
 - **Manual trigger**: Force flush via API call
 
 ```typescript
@@ -287,7 +287,7 @@ Returned by `addItems()`:
 ```typescript
 interface BatchResult {
   batchId: string;      // Same ID you passed in
-  itemCount: number;    // Total items in batch
+  itemCount: number;    // Items added in THIS call (use getBatchStatus for total)
   flushed: boolean;     // Whether batch was flushed
   status: BatchStatus;  // "accumulating" | "flushing" | "completed"
 }
