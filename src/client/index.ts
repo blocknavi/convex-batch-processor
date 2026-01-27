@@ -110,58 +110,58 @@ export interface BatchProcessorAPI {
 	lib: {
 		addItems: FunctionReference<
 			"mutation",
-			"public",
+			"internal",
 			{ batchId: string; items: unknown[]; config: InternalBatchConfig },
 			BatchResult
 		>;
-		flushBatch: FunctionReference<"mutation", "public", { batchId: string }, FlushResult>;
+		flushBatch: FunctionReference<"mutation", "internal", { batchId: string }, FlushResult>;
 		getBatchStatus: FunctionReference<
 			"query",
-			"public",
+			"internal",
 			{ batchId: string },
 			BatchStatusResult | null
 		>;
 		getFlushHistory: FunctionReference<
 			"query",
-			"public",
+			"internal",
 			{ batchId: string; limit?: number },
 			FlushHistoryItem[]
 		>;
 		deleteBatch: FunctionReference<
 			"mutation",
-			"public",
+			"internal",
 			{ batchId: string },
 			{ deleted: boolean; reason?: string }
 		>;
 		startIteratorJob: FunctionReference<
 			"mutation",
-			"public",
+			"internal",
 			{ jobId: string; config: InternalIteratorConfig },
 			JobResult
 		>;
-		pauseIteratorJob: FunctionReference<"mutation", "public", { jobId: string }, JobResult>;
-		resumeIteratorJob: FunctionReference<"mutation", "public", { jobId: string }, JobResult>;
+		pauseIteratorJob: FunctionReference<"mutation", "internal", { jobId: string }, JobResult>;
+		resumeIteratorJob: FunctionReference<"mutation", "internal", { jobId: string }, JobResult>;
 		cancelIteratorJob: FunctionReference<
 			"mutation",
-			"public",
+			"internal",
 			{ jobId: string },
 			JobResult & { reason?: string }
 		>;
 		getIteratorJobStatus: FunctionReference<
 			"query",
-			"public",
+			"internal",
 			{ jobId: string },
 			JobStatusResult | null
 		>;
 		listIteratorJobs: FunctionReference<
 			"query",
-			"public",
+			"internal",
 			{ status?: JobStatus; limit?: number },
 			JobListItem[]
 		>;
 		deleteIteratorJob: FunctionReference<
 			"mutation",
-			"public",
+			"internal",
 			{ jobId: string },
 			{ deleted: boolean; reason?: string }
 		>;

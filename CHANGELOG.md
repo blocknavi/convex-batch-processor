@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed `BatchProcessorAPI` type to use `"internal"` visibility instead of `"public"` to match Convex-generated component APIs
+
 ### Changed
 - **BREAKING**: Moved batch processor config from `addItems()` to constructor
   - Before: `new BatchProcessor(component)` then `addItems(ctx, id, items, config)`

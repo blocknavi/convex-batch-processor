@@ -18,7 +18,7 @@ describe("BatchProcessor client", () => {
 	test("BatchProcessor constructor accepts component API without config", () => {
 		// Create a mock component API
 		const mockComponent = {
-			public: {
+			lib: {
 				addItems: {} as any,
 				flushBatch: {} as any,
 				getBatchStatus: {} as any,
@@ -40,7 +40,7 @@ describe("BatchProcessor client", () => {
 
 	test("BatchProcessor constructor accepts component API with config", () => {
 		const mockComponent = {
-			public: {
+			lib: {
 				addItems: {} as any,
 				flushBatch: {} as any,
 				getBatchStatus: {} as any,
