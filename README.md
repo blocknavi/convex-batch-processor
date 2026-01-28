@@ -8,7 +8,7 @@ A Convex component for batch processing:
 ## Installation
 
 ```bash
-npm install convex-batch-processor
+npm install convex-batch-processor@latest
 ```
 
 ## Setup
